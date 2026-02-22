@@ -1,0 +1,4 @@
+interface:
+  display_name: "PageReport"
+  short_description: "Summarize URL pages, PDFs, and linked attachments"
+  default_prompt: "Generate a report from a given URL and its attachments."
