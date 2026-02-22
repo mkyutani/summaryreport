@@ -5,6 +5,7 @@ Apply this procedure when the provided source URL resolves directly to a PDF fil
 ## Status
 
 Step 1 is implemented.
+Step 2 is intentionally not implemented for PDF flow.
 Step 2 onward are currently unimplemented and must be skipped.
 
 ## Arguments
@@ -44,7 +45,8 @@ Step 8: bluesky-poster -> post to Bluesky
 
 Current handling:
 - Step 1: `IMPLEMENTED`
-- Step 2 onward: `SKIPPED (unimplemented)`
+- Step 2: `SKIPPED (not needed for PDF currently)`
+- Step 3 onward: `SKIPPED (unimplemented)`
 
 ## Step 1 Implementation
 
@@ -53,5 +55,5 @@ Current handling:
 - Command:
   - `python3 scripts/step1_pdf_downloader.py --url \"<PDF_URL>\" [--run-id \"<RUN_ID>\"]`
 - Output artifacts (default):
-  - `tmp/runs/<run_id>/step1-pdf.pdf`
-  - `tmp/runs/<run_id>/step1-pdf-metadata.json`
+  - `tmp/runs/<run_id>/source.pdf`
+  - `tmp/runs/<run_id>/metadata.json`

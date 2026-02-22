@@ -66,8 +66,8 @@ def main() -> int:
 
     source = result.final_url or args.url
     original_filename = Path(unquote(urlparse(source).path)).name or "source.pdf"
-    pdf_path = out_dir / "step1-pdf.pdf"
-    metadata_path = out_dir / "step1-pdf-metadata.json"
+    pdf_path = out_dir / "source.pdf"
+    metadata_path = out_dir / "metadata.json"
 
     pdf_path.write_bytes(result.body)
 

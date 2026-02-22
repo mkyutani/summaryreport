@@ -7,6 +7,7 @@ Apply this procedure when the provided source URL resolves to an HTML page.
 Step 0 is implemented.
 Step 1 is implemented (Docling server required).
 Step 1 substeps (clean/title/pdf-links) are implemented as helper scripts.
+Step 2 is implemented for core metadata (meeting name, date, round).
 Other steps are currently unimplemented and must be skipped.
 
 ## Arguments
@@ -36,8 +37,7 @@ Generate one file:
 ```text
 Step 0: docling-init -> ensure docling server is running
 Step 1: content-acquirer -> HTML retrieval and PDF link extraction
-Step 2: metadata-extractor -> extract meeting name, date, and iteration number
-Step 2.5: page-type-detector -> detect page type
+Step 2: metadata-extractor -> detect page type and extract meeting name/date/round
 Step 3: overview-creator -> create meeting overview
 Step 4: minutes-referencer -> reference minutes
 Step 5: material-selector -> select and download materials
@@ -53,6 +53,7 @@ Current handling:
 - Step 0: `IMPLEMENTED`
 - Step 1: `IMPLEMENTED`
 - Step 1 substeps (clean/title/pdf-links): `IMPLEMENTED (helper scripts)`
+- Step 2: `IMPLEMENTED (meeting name/date/round only)`
 - Other steps: `SKIPPED (unimplemented)`
 
 ## Step 0 Implementation
@@ -72,11 +73,12 @@ Current handling:
   - Endpoint default: `http://127.0.0.1:5001/v1/convert/source`
   - Docling is always used in Step 1. If conversion fails, Step 1 fails.
 - Output artifacts (default):
-  - `tmp/runs/<run_id>/step1-html.html`
-  - `tmp/runs/<run_id>/step1-pdf-links.txt`
-  - `tmp/runs/<run_id>/step1-html-metadata.json`
-  - `tmp/runs/<run_id>/step1-docling.md` (when Docling succeeds)
-  - `tmp/runs/<run_id>/step1-docling-response.json` (when Docling succeeds)
+  - `tmp/runs/<run_id>/source.html`
+  - `tmp/runs/<run_id>/source.md` (Docling markdown cleaned for downstream parsing)
+    - Includes frontmatter: `source_title`, `source_og_title`
+  - `tmp/runs/<run_id>/pdf-links.txt`
+  - `tmp/runs/<run_id>/metadata.json`
+  - `tmp/runs/<run_id>/docling-response.json` (debug/trace)
 
 ## Step 1 Substep Implementations
 
@@ -100,3 +102,26 @@ Current handling:
   - Output:
     - `tmp/runs/<run_id>/step1/pdf-links/pdf-links.json`
     - `tmp/runs/<run_id>/step1/pdf-links/pdf-links-metadata.json`
+
+## Step 2 Implementation
+
+- Script: `scripts/step2_metadata_extractor.py`
+- Purpose: pass full `source.md` to LLM, detect page type, and extract metadata directly.
+- Command:
+  - `python3 scripts/step2_metadata_extractor.py --run-id "<RUN_ID>" --mode html --url "<HTML_URL>" --md-file "tmp/runs/<run_id>/source.md"`
+- Output:
+  - `tmp/runs/<run_id>/step2-metadata.json`
+- LLM requirements:
+  - `OPENAI_API_KEY` must be set.
+  - Model default is `gpt-4.1-mini` (override with `PAGEREPORT_STEP2_MODEL`).
+- Extracted fields:
+  - `page_type`
+  - `meeting_name`
+  - `date` (`yyyymmdd`)
+  - `round` (`round_number`, `round_text`)
+  - `reasoning_brief`
+  - `report_title`
+  - `output_report_path`
+- Date post-validation:
+  - Validate LLM date against date candidates extracted from `source.md`.
+  - If LLM date is not in candidates, fallback to the first date candidate in `source.md`.

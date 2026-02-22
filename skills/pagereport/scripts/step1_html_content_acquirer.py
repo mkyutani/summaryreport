@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -70,6 +71,87 @@ def dedupe_keep_order(values: List[str]) -> List[str]:
     return result
 
 
+def clean_markdown(md_text: str) -> str:
+    """Drop common navigation/breadcrumb/footer noise from markdown."""
+    drop_line_patterns = [
+        r"^\s*ホーム\s*$",
+        r"^\s*トップページ\s*$",
+        r"^\s*サイトマップ\s*$",
+        r"^\s*お問い合わせ\s*$",
+        r"^\s*English\s*$",
+        r"^\s*本文へ\s*$",
+        r"^\s*パンくず\s*$",
+        r"^\s*copyright\b",
+    ]
+    compiled = [re.compile(pat, re.IGNORECASE) for pat in drop_line_patterns]
+    drop_hint_words = [
+        "breadcrumb",
+        "パンくず",
+        "global navi",
+        "global navigation",
+        "フッター",
+        "サイト内検索",
+    ]
+
+    lines = md_text.splitlines()
+    cleaned: List[str] = []
+    for line in lines:
+        raw = line.strip()
+        if not raw:
+            cleaned.append("")
+            continue
+        lowered = raw.lower()
+        if any(p.match(raw) for p in compiled):
+            continue
+        if any(word in lowered for word in [w.lower() for w in drop_hint_words]):
+            continue
+        cleaned.append(line)
+
+    text = "\n".join(cleaned)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text + ("\n" if text else "")
+
+
+def extract_html_titles(html_text: str) -> dict[str, str]:
+    title = ""
+    og_title = ""
+
+    m = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.IGNORECASE | re.DOTALL)
+    if m:
+        title = _normalize_inline_text(m.group(1))
+
+    m = re.search(
+        r"""<meta[^>]+(?:property|name)\s*=\s*["']og:title["'][^>]+content\s*=\s*["'](.*?)["'][^>]*>""",
+        html_text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        og_title = _normalize_inline_text(m.group(1))
+
+    return {
+        "title": title,
+        "og_title": og_title,
+    }
+
+
+def _normalize_inline_text(text: str) -> str:
+    cleaned = re.sub(r"<[^>]+>", "", text)
+    cleaned = cleaned.replace("\n", " ").replace("\r", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def render_source_md(cleaned_md: str, titles: dict[str, str]) -> str:
+    lines = ["---"]
+    lines.append(f'source_title: "{titles.get("title", "").replace("\"", "\\\"")}"')
+    lines.append(f'source_og_title: "{titles.get("og_title", "").replace("\"", "\\\"")}"')
+    lines.append("---")
+    lines.append("")
+    lines.append(cleaned_md.rstrip())
+    lines.append("")
+    return "\n".join(lines)
+
+
 def make_run_id() -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     suffix = uuid4().hex[:6]
@@ -119,11 +201,11 @@ def main() -> int:
     out_dir = Path(args.tmp_root) / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    html_path = out_dir / "step1-html.html"
-    links_path = out_dir / "step1-pdf-links.txt"
-    metadata_path = out_dir / "step1-html-metadata.json"
-    docling_md_path = out_dir / "step1-docling.md"
-    docling_raw_path = out_dir / "step1-docling-response.json"
+    html_path = out_dir / "source.html"
+    links_path = out_dir / "pdf-links.txt"
+    metadata_path = out_dir / "metadata.json"
+    source_md_path = out_dir / "source.md"
+    docling_raw_path = out_dir / "docling-response.json"
 
     html_path.write_text(html_text, encoding="utf-8")
     links_path.write_text("\n".join(pdf_links) + ("\n" if pdf_links else ""), encoding="utf-8")
@@ -137,7 +219,7 @@ def main() -> int:
         "content_type": result.content_type,
         "used_browser_headers": result.used_browser_headers,
         "pdf_link_count": len(pdf_links),
-        "html_path": str(html_path),
+        "source_html_path": str(html_path),
         "pdf_links_path": str(links_path),
         "docling": {
             "enabled": True,
@@ -152,14 +234,17 @@ def main() -> int:
             endpoint=args.docling_endpoint,
             timeout_seconds=args.docling_timeout,
         )
-        docling_md_path.write_text(docling_result["markdown"], encoding="utf-8")
+        cleaned_md = clean_markdown(docling_result["markdown"])
+        titles = extract_html_titles(html_text)
+        source_md_path.write_text(render_source_md(cleaned_md, titles), encoding="utf-8")
         docling_raw_path.write_text(
             json.dumps(docling_result["raw_response"], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         metadata["docling"]["succeeded"] = True
-        metadata["docling"]["markdown_path"] = str(docling_md_path)
+        metadata["docling"]["source_md_path"] = str(source_md_path)
         metadata["docling"]["response_path"] = str(docling_raw_path)
+        metadata["source_titles"] = titles
     except DoclingError as exc:
         metadata["docling"]["error"] = str(exc)
         metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
