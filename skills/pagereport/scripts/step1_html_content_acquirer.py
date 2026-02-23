@@ -37,7 +37,9 @@ class PdfLinkExtractor(HTMLParser):
     def __init__(self, base_url: str) -> None:
         super().__init__()
         self.base_url = base_url
-        self.links: List[str] = []
+        self.links: List[dict[str, str]] = []
+        self._current_pdf_href = ""
+        self._current_text_parts: List[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         if tag.lower() != "a":
@@ -57,16 +59,35 @@ class PdfLinkExtractor(HTMLParser):
         lowered = absolute.lower()
         if ".pdf" not in lowered:
             return
-        self.links.append(absolute)
+        self._current_pdf_href = absolute
+        self._current_text_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if not self._current_pdf_href:
+            return
+        txt = _normalize_inline_text(data)
+        if txt:
+            self._current_text_parts.append(txt)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a":
+            return
+        if not self._current_pdf_href:
+            return
+        text = _normalize_inline_text(" ".join(self._current_text_parts))
+        self.links.append({"url": self._current_pdf_href, "text": text})
+        self._current_pdf_href = ""
+        self._current_text_parts = []
 
 
-def dedupe_keep_order(values: List[str]) -> List[str]:
+def dedupe_keep_order(values: List[dict[str, str]]) -> List[dict[str, str]]:
     seen = set()
-    result: List[str] = []
+    result: List[dict[str, str]] = []
     for value in values:
-        if value in seen:
+        url = value.get("url", "")
+        if not url or url in seen:
             continue
-        seen.add(value)
+        seen.add(url)
         result.append(value)
     return result
 
@@ -152,6 +173,21 @@ def render_source_md(cleaned_md: str, titles: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def render_pdf_links(entries: List[dict[str, str]]) -> str:
+    lines: List[str] = []
+    for e in entries:
+        url = (e.get("url") or "").strip()
+        text = _normalize_inline_text(e.get("text", ""))
+        if not url:
+            continue
+        if text:
+            safe_text = text.replace("\t", " ")
+            lines.append(f"{safe_text}\t{url}")
+        else:
+            lines.append(url)
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 def make_run_id() -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     suffix = uuid4().hex[:6]
@@ -208,7 +244,7 @@ def main() -> int:
     docling_raw_path = out_dir / "docling-response.json"
 
     html_path.write_text(html_text, encoding="utf-8")
-    links_path.write_text("\n".join(pdf_links) + ("\n" if pdf_links else ""), encoding="utf-8")
+    links_path.write_text(render_pdf_links(pdf_links), encoding="utf-8")
 
     metadata = {
         "run_id": run_id,

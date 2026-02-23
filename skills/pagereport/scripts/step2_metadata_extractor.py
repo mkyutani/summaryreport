@@ -25,6 +25,63 @@ def _read_text(path: Optional[str]) -> str:
     return p.read_text(encoding="utf-8", errors="replace")
 
 
+def _strip_frontmatter(md_text: str) -> str:
+    lines = md_text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return md_text
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return "\n".join(lines[i + 1 :]).lstrip("\n")
+    return md_text
+
+
+def _extract_heading_texts(md_text: str) -> list[str]:
+    body = _strip_frontmatter(md_text)
+    headings: list[str] = []
+    for line in body.splitlines():
+        m = re.match(r"^(#{1,3})\s+(.+?)\s*$", line.strip())
+        if m:
+            headings.append(m.group(2).strip())
+    return headings
+
+
+def _heading_based_page_type(md_text: str) -> Optional[str]:
+    headings = _extract_heading_texts(md_text)
+    if not headings:
+        return None
+
+    meeting_patterns = [
+        re.compile(r"第\s*\d+\s*回"),
+        re.compile(r"議事録"),
+        re.compile(r"議事要旨"),
+        re.compile(r"議事概要"),
+        re.compile(r"出席者"),
+        re.compile(r"委員名簿"),
+    ]
+    report_patterns = [
+        re.compile(r"予算"),
+        re.compile(r"概算要求"),
+        re.compile(r"基本方針"),
+        re.compile(r"とりまとめ"),
+        re.compile(r"取りまとめ"),
+        re.compile(r"答申"),
+    ]
+
+    has_meeting = False
+    has_report = False
+    for h in headings:
+        if any(p.search(h) for p in meeting_patterns):
+            has_meeting = True
+        if any(p.search(h) for p in report_patterns):
+            has_report = True
+
+    if has_meeting and not has_report:
+        return "MEETING"
+    if has_report and not has_meeting:
+        return "REPORT"
+    return None
+
+
 def _normalize(text: str) -> str:
     text = text.strip()
     text = re.sub(r"\s+", " ", text)
@@ -275,6 +332,8 @@ def main() -> int:
                 source_meta[k.strip()] = v.strip().strip('"').strip("'")
 
     llm_data = _call_llm(source_md, args.url, pdf_count, source_meta)
+    heading_page_type = _heading_based_page_type(source_md)
+    final_page_type = heading_page_type or llm_data.get("page_type", "UNKNOWN")
 
     meeting_name = llm_data.get("meeting_name")
     date_yyyymmdd, date_source = _resolve_date_yyyymmdd(llm_data.get("date_iso"), source_md)
@@ -287,7 +346,7 @@ def main() -> int:
         "run_id": args.run_id,
         "mode": args.mode,
         "url": args.url,
-        "page_type": llm_data.get("page_type", "UNKNOWN"),
+        "page_type": final_page_type,
         "meeting_name": {
             "value": meeting_name,
             "extraction_source": "llm",
@@ -311,6 +370,8 @@ def main() -> int:
             "pdf_count": pdf_count,
             "source_meta": source_meta,
             "model": OPENAI_MODEL,
+            "heading_page_type": heading_page_type,
+            "llm_page_type": llm_data.get("page_type", "UNKNOWN"),
         },
     }
 

@@ -8,7 +8,8 @@ Step 0 is implemented.
 Step 1 is implemented (Docling server required).
 Step 1 substeps (clean/title/pdf-links) are implemented as helper scripts.
 Step 2 is implemented for core metadata (meeting name, date, round).
-Other steps are currently unimplemented and must be skipped.
+Step 4 is implemented (minutes source selection).
+Step 5 onward are currently unimplemented and must be skipped.
 
 ## Arguments
 
@@ -38,8 +39,8 @@ Generate one file:
 Step 0: docling-init -> ensure docling server is running
 Step 1: content-acquirer -> HTML retrieval and PDF link extraction
 Step 2: metadata-extractor -> detect page type and extract meeting name/date/round
-Step 3: overview-creator -> create meeting overview
-Step 4: minutes-referencer -> reference minutes
+Step 3: overview-creator -> optional (skip by default)
+Step 4: minutes-referencer -> reference minutes (default: run after Step 2)
 Step 5: material-selector -> select and download materials
 Step 6: document-type-classifier (parallel) -> classify document type
 Step 7: pdf-converter (parallel) -> convert PDF
@@ -54,7 +55,9 @@ Current handling:
 - Step 1: `IMPLEMENTED`
 - Step 1 substeps (clean/title/pdf-links): `IMPLEMENTED (helper scripts)`
 - Step 2: `IMPLEMENTED (meeting name/date/round only)`
-- Other steps: `SKIPPED (unimplemented)`
+- Step 3: `OPTIONAL (skip by default)`
+- Step 4: `IMPLEMENTED (html/pdf/none branching)`
+- Step 5 onward: `SKIPPED (unimplemented)`
 
 ## Step 0 Implementation
 
@@ -125,3 +128,59 @@ Current handling:
 - Date post-validation:
   - Validate LLM date against date candidates extracted from `source.md`.
   - If LLM date is not in candidates, fallback to the first date candidate in `source.md`.
+
+## Step 4 Specification (minutes-referencer)
+
+- Inputs:
+  - `tmp/runs/<run_id>/source.md`
+  - `tmp/runs/<run_id>/pdf-links.txt`
+- Goal:
+  - Find a minutes source for downstream summarization.
+  - Preferred output is one selected source (HTML section or minutes PDF).
+
+### Branching Rules
+
+1. HTML本文に議事録/議事要旨がある場合
+- Detect in `source.md` by heading/keyword match such as:
+  - `議事録`, `議事要旨`, `議事概要`, `会議概要`
+- Output selection:
+  - `minutes_source.type = "html"`
+  - `minutes_source.path = "tmp/runs/<run_id>/source.md"`
+  - `minutes_source.anchor = <matched heading text>`
+
+2. HTML本文に十分な議事録情報がなく、議事録PDFがある場合
+- Detect from `pdf-links.txt` by filename/link text keywords such as:
+  - `gijiroku`, `gijiyoshi`, `minutes`, `議事録`, `議事要旨`
+- Output selection:
+  - `minutes_source.type = "pdf"`
+  - `minutes_source.url = <selected PDF URL>`
+  - `minutes_source.reason = "filename/text keyword match"`
+
+3. どちらにもない場合
+- Output selection:
+  - `minutes_source.type = "none"`
+  - `minutes_source.reason = "no minutes content in html and no minutes-like pdf link"`
+- This is not fatal. Continue to Step 5.
+
+### Expected Output File
+
+- `tmp/runs/<run_id>/minutes-source.json`
+  - Contains selected source and branch decision.
+  - Downstream steps use this file as first reference for minutes context.
+
+## Step 4 Implementation
+
+- Script: `scripts/step4_minutes_referencer.py`
+- Command:
+  - `python3 scripts/step4_minutes_referencer.py --run-id "<RUN_ID>"`
+- Inputs (default):
+  - `tmp/runs/<run_id>/source.md`
+  - `tmp/runs/<run_id>/pdf-links.txt`
+- Output:
+  - `tmp/runs/<run_id>/minutes-source.json`
+
+## Execution Order
+
+- Default order:
+  - `Step 0 -> Step 1 -> Step 2 -> Step 4 -> Step 5 -> ...`
+- `Step 3` is optional and should run only when additional overview quality is needed.
