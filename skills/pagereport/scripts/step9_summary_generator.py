@@ -67,6 +67,19 @@ def _step9_schema() -> dict[str, Any]:
     }
 
 
+def _step9_review_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "is_ok": {"type": "boolean"},
+            "needs_regeneration": {"type": "boolean"},
+            "feedback": {"type": "string"},
+        },
+        "required": ["is_ok", "needs_regeneration", "feedback"],
+    }
+
+
 def _call_llm(system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
@@ -98,6 +111,49 @@ def _call_llm(system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any
         raise RuntimeError(f"LLM request failed: {exc.code} {detail}") from exc
     except error.URLError as exc:
         raise RuntimeError(f"LLM request failed: {exc}") from exc
+
+    data = json.loads(raw.decode("utf-8", errors="replace"))
+    content = data["choices"][0]["message"]["content"]
+    return json.loads(content)
+
+
+def _call_llm_review(review_payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+
+    system_prompt = (
+        "You are a strict reviewer for Japanese summaries. "
+        "Reject summaries that are mostly page-description or link/list explanation. "
+        "Accept summaries that explain substantive meeting/report themes and what is examined. "
+        "Focus especially on 'ページには/掲載されている/資料が並ぶだけ' style."
+    )
+    body = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(review_payload, ensure_ascii=False)},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "step9_quality_review", "schema": _step9_review_schema(), "strict": True},
+        },
+    }
+
+    req = request.Request(
+        f"{OPENAI_API_BASE}/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with request.urlopen(req, timeout=180) as resp:
+            raw = resp.read()
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"LLM review failed: {exc.code} {detail}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"LLM review failed: {exc}") from exc
 
     data = json.loads(raw.decode("utf-8", errors="replace"))
     content = data["choices"][0]["message"]["content"]
@@ -146,6 +202,34 @@ def _strip_absence_statements(text: str) -> str:
     return t
 
 
+def _cleanup_meta_phrasing(text: str) -> str:
+    if not text:
+        return text
+    t = text
+    t = re.sub(r"議事次第[:：]\s*", "", t)
+    t = t.replace("ページには", "本会合では")
+    t = t.replace("ページ上には", "本会合では")
+    t = t.replace("掲載されている", "示されている")
+    t = re.sub(r"(第[0-9０-９]+回)\s+\1", r"\1", t)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t
+
+
+def _dedupe_round_repetition(text: str) -> str:
+    if not text:
+        return text
+    t = text
+    # e.g. "会議（第１８回）第１８回の..." -> "会議（第１８回）の..."
+    t = re.sub(
+        r"（(第[0-9０-９]+回)）\s*\1の",
+        r"（\1）の",
+        t,
+    )
+    # generic fallback: "...第18回 第18回..."
+    t = re.sub(r"(第[0-9０-９]+回)\s+\1", r"\1", t)
+    return re.sub(r"\s{2,}", " ", t).strip()
+
+
 def _minutes_note_metadata(page_type: str, minutes_available: bool) -> str:
     if page_type != "MEETING":
         return ""
@@ -168,10 +252,16 @@ def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_
         return (
             common
             + " This is a MEETING page with no usable minutes and no material summaries. "
-            "Describe only what is explicitly present on the page and its linked document titles. "
+            "Describe only what is explicitly present on the page (agenda/theme/high-level context). "
+            "Do not enumerate individual linked document titles. "
             "Do not describe discussion details, opinions, or decisions. "
             "Write in meeting style: start with the meeting name/round and agenda, "
-            "not with meta page-description phrases like '...を掲載するページ'."
+            "not with meta page-description phrases like '...を掲載するページ'. "
+            "Never use list-intro sentences such as '以下の資料が掲載されている'. "
+            "Do not emit colon-led title enumerations. "
+            "Do not use metatext phrases such as '議事次第：' or 'ページには'. "
+            "Do not mention attendee lists, file links, reference-material availability, or schedule-link existence. "
+            "Focus only on substantive policy/agenda themes and what is being examined."
         )
     if page_type == "REPORT":
         return (
@@ -282,6 +372,50 @@ def _generate_with_retry(system_prompt: str, payload: dict[str, Any]) -> dict[st
     return second
 
 
+def _review_and_regenerate(
+    system_prompt: str,
+    user_payload: dict[str, Any],
+    generated: dict[str, Any],
+    max_regen: int = 1,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    history: list[dict[str, Any]] = []
+    current = generated
+    prompt = system_prompt
+
+    for _ in range(max_regen + 1):
+        abstract = _normalize_summary_opening(str(current.get("abstract_ja", "")).strip())
+        overall = str(current.get("overall_summary_ja", "")).strip()
+        review_payload = {
+            "summary_context": {
+                "page_type": user_payload.get("page_type", ""),
+                "meeting_name": user_payload.get("meeting_name", ""),
+                "materials_count": len(user_payload.get("materials", []) or []),
+            },
+            "abstract_ja": abstract,
+            "overall_summary_ja": overall,
+            "criteria": [
+                "ページ説明文・リンク説明文に偏っていないこと",
+                "実質的な議題・政策テーマ・検討対象が記述されていること",
+                "単なる資料名列挙や掲載案内になっていないこと",
+            ],
+        }
+        review = _call_llm_review(review_payload)
+        history.append(review)
+        if bool(review.get("is_ok")) and not bool(review.get("needs_regeneration")):
+            return current, history
+
+        feedback = str(review.get("feedback", "")).strip()
+        prompt = (
+            system_prompt
+            + " Regeneration required after quality review. "
+            + "Fix issues and avoid page-description style. "
+            + ("Feedback: " + feedback if feedback else "")
+        )
+        current = _generate_with_retry(prompt, user_payload)
+
+    return current, history
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Step 9 integrated summary generator")
     parser.add_argument("--run-id", required=True, help="Run identifier")
@@ -333,12 +467,15 @@ def main() -> int:
     system_prompt = _build_system_prompt(page_type, minutes_available, materials_non_empty)
     user_payload = _build_user_payload(step2, step4_source, step4_extract, minutes_md, step8, pdf_links)
     generated = _generate_with_retry(system_prompt, user_payload)
+    generated, review_history = _review_and_regenerate(system_prompt, user_payload, generated, max_regen=1)
 
     abstract = _normalize_summary_opening(str(generated.get("abstract_ja", "")).strip())
-    abstract = _strip_meta_page_leadin(abstract)
     overall = str(generated.get("overall_summary_ja", "")).strip()
+    # Keep this behavior prompt-driven: no extra text-shaping for page-structure phrasing.
     abstract = _strip_absence_statements(abstract)
     overall = _strip_absence_statements(overall)
+    abstract = _dedupe_round_repetition(abstract)
+    overall = _dedupe_round_repetition(overall)
     auto_minutes_note = _minutes_note_metadata(page_type, minutes_available)
 
     payload = {
@@ -351,6 +488,7 @@ def main() -> int:
             "step8_file": str(step8_path),
             "pdf_links_file": str(pdf_links_path),
             "model": OPENAI_MODEL,
+            "quality_review_enabled": True,
         },
         "page_type": page_type,
         "source_url": step2.get("url", ""),
@@ -363,6 +501,10 @@ def main() -> int:
         },
         "abstract_ja": _trim_chars(abstract, 1500),
         "overall_summary_ja": overall,
+        "quality_review": {
+            "attempts": len(review_history),
+            "history": review_history,
+        },
     }
 
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
