@@ -13,7 +13,9 @@ Step 5 is implemented (material scoring and selection).
 Step 6 is implemented (parallel document pipeline + deferred resolution).
 Step 7 is implemented (type-based conversion).
 Step 8 is implemented (LLM per-document summarization for Step9 input).
-Step 9 onward are currently unimplemented and must be skipped.
+Step 9 is implemented (integrated summary generation).
+Step 10 is implemented (final markdown writer).
+Step 11 onward are currently unimplemented and must be skipped.
 
 ## Arguments
 
@@ -65,7 +67,9 @@ Current handling:
 - Step 6: `IMPLEMENTED (parallel classify + early analysis + deferred resolve)`
 - Step 7: `IMPLEMENTED (ppt important-page markdown, word/other full text)`
 - Step 8: `IMPLEMENTED (LLM per-document summarization)`
-- Step 9 onward: `SKIPPED (unimplemented)`
+- Step 9: `IMPLEMENTED (meeting/report branched integrated summary)`
+- Step 10: `IMPLEMENTED (output/<title>_report.md writer)`
+- Step 11 onward: `SKIPPED (unimplemented)`
 
 ## Step 0 Implementation
 
@@ -310,10 +314,66 @@ Legacy standalone mode:
     - `per_document[].used_sections`
     - `per_document[].empty_content`, `empty_reason`
 
+## Step 9 Implementation
+
+- Script: `scripts/step9_summary_generator.py`
+- Purpose:
+  - generate overall integrated summary from:
+    - Step2 meeting/report metadata
+    - Step4 minutes (when available)
+    - Step8 per-document summaries
+- Command:
+  - `python3 scripts/step9_summary_generator.py --run-id "<RUN_ID>"`
+- Inputs:
+  - `tmp/runs/<run_id>/step2-metadata.json`
+  - `tmp/runs/<run_id>/minutes-source.json`
+  - `tmp/runs/<run_id>/minutes-extraction.json`
+  - `tmp/runs/<run_id>/minutes.md` (optional)
+  - `tmp/runs/<run_id>/step8-material-summaries.json`
+- Processing:
+  - branch by `page_type` from Step2:
+    - `MEETING`: include meeting context and minutes-aware wording.
+    - `REPORT`: focus on report/policy content (no fake meeting-discussion phrasing).
+  - generate:
+    - `abstract_ja` (<= 1500 chars, retry once if too long)
+    - `overall_summary_ja`
+  - if `MEETING` and no minutes available, explicitly note that verbatim discussion details are unavailable.
+- LLM requirements:
+  - `OPENAI_API_KEY` must be set.
+  - model default: `gpt-4.1-mini` (override with `PAGEREPORT_STEP9_MODEL`).
+- Output:
+  - `tmp/runs/<run_id>/step9-summary.json`
+    - `abstract_ja`
+    - `overall_summary_ja`
+    - `minutes_used`, `minutes_note`
+    - `materials_coverage`
+
+## Step 10 Implementation
+
+- Script: `scripts/step10_file_writer.py`
+- Purpose:
+  - write final report markdown file from Step2/Step9 (and Step8 details).
+- Command:
+  - `python3 scripts/step10_file_writer.py --run-id "<RUN_ID>"`
+- Inputs:
+  - `tmp/runs/<run_id>/step2-metadata.json`
+  - `tmp/runs/<run_id>/step9-summary.json`
+  - `tmp/runs/<run_id>/step8-material-summaries.json` (optional)
+- Output:
+  - `output/<タイトル>_report.md` (from Step2 `output_report_path`)
+  - `tmp/runs/<run_id>/step10-output.json` (validation metadata)
+- Required formatting:
+  - report has 3 major sections:
+    - `ページの概要`
+    - `要約（Abstract）`
+    - `ページの詳細サマリー`
+  - `要約（Abstract）` must be in a fenced code block.
+  - source URL must be included inside the abstract code block (for Bluesky usage).
+
 ## Execution Order
 
 - Default order:
-  - `Step 0 -> Step 1 -> Step 2 -> Step 4 -> Step 5 -> (Step6-8 integrated per PDF) -> ...`
+  - `Step 0 -> Step 1 -> Step 2 -> Step 4 -> Step 5 -> (Step6-8 integrated per PDF) -> Step 9 -> Step 10 -> ...`
 - Equivalent split order (legacy):
-  - `Step 0 -> Step 1 -> Step 2 -> Step 4 -> Step 5 -> Step 6 -> Step 7 -> Step 8 -> ...`
+  - `Step 0 -> Step 1 -> Step 2 -> Step 4 -> Step 5 -> Step 6 -> Step 7 -> Step 8 -> Step 9 -> Step 10 -> ...`
 - `Step 3` is optional and should run only when additional overview quality is needed.
