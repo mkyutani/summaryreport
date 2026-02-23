@@ -10,7 +10,10 @@ Step 1 substeps (clean/title/pdf-links) are implemented as helper scripts.
 Step 2 is implemented for core metadata (meeting name, date, round).
 Step 4 is implemented (minutes source selection).
 Step 5 is implemented (material scoring and selection).
-Step 6 onward are currently unimplemented and must be skipped.
+Step 6 is implemented (parallel document pipeline + deferred resolution).
+Step 7 is implemented (type-based conversion).
+Step 8 is implemented (LLM per-document summarization for Step9 input).
+Step 9 onward are currently unimplemented and must be skipped.
 
 ## Arguments
 
@@ -59,7 +62,10 @@ Current handling:
 - Step 3: `OPTIONAL (skip by default)`
 - Step 4: `IMPLEMENTED (html/pdf/none branching)`
 - Step 5: `IMPLEMENTED (scoring + selection)`
-- Step 6 onward: `SKIPPED (unimplemented)`
+- Step 6: `IMPLEMENTED (parallel classify + early analysis + deferred resolve)`
+- Step 7: `IMPLEMENTED (ppt important-page markdown, word/other full text)`
+- Step 8: `IMPLEMENTED (LLM per-document summarization)`
+- Step 9 onward: `SKIPPED (unimplemented)`
 
 ## Step 0 Implementation
 
@@ -208,8 +214,106 @@ Current handling:
   - `selected_pdfs[].decision_pending = true`
   - `selected_pdfs[].decision_group_id` and `decision_role` (`summary` / `full`)
 
+## Step 6 Implementation
+
+Preferred execution mode for Step6-8:
+- Script: `scripts/step6_8_document_pipeline.py`
+- Command:
+  - `python3 scripts/step6_8_document_pipeline.py --run-id "<RUN_ID>"`
+- Behavior:
+  - resolve deferred selection once.
+  - for each final-selected PDF, run `Step6 -> Step7 -> Step8` continuously in the same worker.
+  - run workers in parallel across PDFs.
+  - still writes standard output files for compatibility:
+    - `tmp/runs/<run_id>/step6-document-pipeline.json`
+    - `tmp/runs/<run_id>/step7-conversion.json`
+    - `tmp/runs/<run_id>/step8-material-summaries.json`
+
+Legacy split mode (still available):
+- Script: `scripts/step6_document_pipeline.py`
+- Purpose:
+  - process selected PDFs in parallel.
+  - classify document type (Word-like / PowerPoint-like / agenda / participants / press / survey).
+  - resolve `deferred_decisions` using page count rule.
+- Command:
+  - `python3 scripts/step6_document_pipeline.py --run-id "<RUN_ID>"`
+- Inputs:
+  - `tmp/runs/<run_id>/step5-material-selection.json`
+- Internal processing:
+  - Phase A (lightweight): `pdfinfo` for page count on Step5-selected PDFs, then resolve deferred pairs.
+  - Phase B (full): run `pdftotext -f 1 -l 5` and document-type classification only on `final_selected_pdfs`.
+  - parallel per PDF where applicable (thread pool).
+- Deferred resolution rule:
+  - if full document pages `<= 20`: choose full.
+  - else: choose summary.
+- Output:
+  - `tmp/runs/<run_id>/step6-document-pipeline.json`
+    - `per_pdf_analysis`
+    - `resolved_deferred_decisions`
+    - `final_selected_pdfs`
+
+## Step 7 Implementation
+
+When using preferred integrated mode, Step 7 runs inside:
+- `scripts/step6_8_document_pipeline.py`
+
+Legacy standalone mode:
+- Script: `scripts/step7_conversion_pipeline.py`
+- Purpose:
+  - convert `final_selected_pdfs` using Step6 document type.
+- Command:
+  - `python3 scripts/step7_conversion_pipeline.py --run-id "<RUN_ID>"`
+- Inputs:
+  - `tmp/runs/<run_id>/step6-document-pipeline.json`
+- Processing:
+  - all docs: `pdftotext` full-text conversion.
+  - `powerpoint_like`: detect important pages from slide title lines and emit markdown excerpt.
+  - `word_like` / `mixed` / `other`: use `pdftotext` full text as-is.
+  - per-PDF parallel execution where possible.
+- Output:
+  - `tmp/runs/<run_id>/step7-conversion.json`
+- `tmp/runs/<run_id>/step7-*.txt`
+- `tmp/runs/<run_id>/step7-*.md` (for powerpoint-like docs only)
+
+## Step 8 Implementation
+
+When using preferred integrated mode, Step 8 runs inside:
+- `scripts/step6_8_document_pipeline.py`
+
+Legacy standalone mode:
+- Script: `scripts/step8_material_summarizer.py`
+- Purpose:
+  - summarize each Step7-converted material with LLM for Step9 integration input.
+- Command:
+  - `python3 scripts/step8_material_summarizer.py --run-id "<RUN_ID>"`
+- Inputs:
+  - `tmp/runs/<run_id>/step7-conversion.json`
+- Processing:
+  - `powerpoint_like + markdown`:
+    - strategy `ppt_selected_pages_md` (summarize selected pages markdown from Step7).
+  - text outputs (`word_like` / `mixed` / `other`):
+    - adaptive read strategies by line count:
+      - `word_small` (full text)
+      - `word_medium` (head/tail + keyword windows)
+      - `word_large` / `word_xlarge` (compressed windows)
+  - per-document parallel processing with configurable workers.
+  - empty-content detection delegated to LLM output schema.
+- LLM requirements:
+  - `OPENAI_API_KEY` must be set.
+  - model default: `gpt-4.1-mini` (override with `PAGEREPORT_STEP8_MODEL`).
+  - optional endpoint override: `OPENAI_API_BASE`.
+- Output:
+  - `tmp/runs/<run_id>/step8-material-summaries.json`
+    - `per_document[].summary`
+    - `per_document[].key_points`
+    - `per_document[].read_strategy`
+    - `per_document[].used_sections`
+    - `per_document[].empty_content`, `empty_reason`
+
 ## Execution Order
 
 - Default order:
-  - `Step 0 -> Step 1 -> Step 2 -> Step 4 -> Step 5 -> ...`
+  - `Step 0 -> Step 1 -> Step 2 -> Step 4 -> Step 5 -> (Step6-8 integrated per PDF) -> ...`
+- Equivalent split order (legacy):
+  - `Step 0 -> Step 1 -> Step 2 -> Step 4 -> Step 5 -> Step 6 -> Step 7 -> Step 8 -> ...`
 - `Step 3` is optional and should run only when additional overview quality is needed.
