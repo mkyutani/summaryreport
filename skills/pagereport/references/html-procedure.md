@@ -9,7 +9,8 @@ Step 1 is implemented (Docling server required).
 Step 1 substeps (clean/title/pdf-links) are implemented as helper scripts.
 Step 2 is implemented for core metadata (meeting name, date, round).
 Step 4 is implemented (minutes source selection).
-Step 5 onward are currently unimplemented and must be skipped.
+Step 5 is implemented (material scoring and selection).
+Step 6 onward are currently unimplemented and must be skipped.
 
 ## Arguments
 
@@ -57,7 +58,8 @@ Current handling:
 - Step 2: `IMPLEMENTED (meeting name/date/round only)`
 - Step 3: `OPTIONAL (skip by default)`
 - Step 4: `IMPLEMENTED (html/pdf/none branching)`
-- Step 5 onward: `SKIPPED (unimplemented)`
+- Step 5: `IMPLEMENTED (scoring + selection)`
+- Step 6 onward: `SKIPPED (unimplemented)`
 
 ## Step 0 Implementation
 
@@ -80,6 +82,7 @@ Current handling:
   - `tmp/runs/<run_id>/source.md` (Docling markdown cleaned for downstream parsing)
     - Includes frontmatter: `source_title`, `source_og_title`
   - `tmp/runs/<run_id>/pdf-links.txt`
+  - `tmp/runs/<run_id>/pdf-links.json` (structured links with estimated category)
   - `tmp/runs/<run_id>/metadata.json`
   - `tmp/runs/<run_id>/docling-response.json` (debug/trace)
 
@@ -178,6 +181,32 @@ Current handling:
   - `tmp/runs/<run_id>/pdf-links.txt`
 - Output:
   - `tmp/runs/<run_id>/minutes-source.json`
+
+## Step 5 Implementation
+
+- Script: `scripts/step5_material_selector.py`
+- Purpose:
+  - score each PDF link and select materials needed for summarization.
+- Command:
+  - `python3 scripts/step5_material_selector.py --run-id "<RUN_ID>"`
+- Inputs (default):
+  - `tmp/runs/<run_id>/pdf-links.json` (preferred)
+  - `tmp/runs/<run_id>/pdf-links.txt` (fallback)
+  - `tmp/runs/<run_id>/minutes.md` (optional bonus source)
+- Output:
+  - `tmp/runs/<run_id>/step5-material-selection.json`
+  - `tmp/runs/<run_id>/step5-selected-*.pdf` (selected PDFs downloaded in run root; no subdirectory)
+- Document categories:
+  - `agenda`, `minutes`, `executive_summary`, `material`, `reference`,
+    `participants`, `seating`, `disclosure_method`, `personal_material`, `other`
+- Selection rule:
+  - select PDFs with `priority_score >= 4`
+  - if selected count exceeds 5, keep top 5 by score
+  - exception: if a summary/full pair is detected, include both and mark as pending decision
+- Deferred decision fields (for Step 6 resolution):
+  - `deferred_decisions[]` with rule `prefer_full_if_pages_le_20_else_summary`
+  - `selected_pdfs[].decision_pending = true`
+  - `selected_pdfs[].decision_group_id` and `decision_role` (`summary` / `full`)
 
 ## Execution Order
 

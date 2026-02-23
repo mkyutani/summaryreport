@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import List
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 from uuid import uuid4
 
 from docling_client import DEFAULT_DOCLING_ENDPOINT, DoclingError, convert_url_to_markdown
@@ -23,14 +23,93 @@ def is_go_jp_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and (host == "go.jp" or host.endswith(".go.jp"))
 
 
-def decode_html(raw: bytes, content_type: str) -> str:
-    charset = "utf-8"
-    if "charset=" in content_type:
-        charset = content_type.split("charset=", 1)[1].split(";", 1)[0].strip()
+def _extract_charset_from_content_type(content_type: str) -> str:
+    ct = (content_type or "").lower()
+    if "charset=" not in ct:
+        return ""
+    charset = ct.split("charset=", 1)[1].split(";", 1)[0].strip().strip('"').strip("'")
+    return charset
+
+
+def _extract_declared_charset(raw: bytes) -> str:
+    # Read only head-ish bytes to avoid expensive decode.
+    head = raw[:8192]
+    for enc in ("ascii", "latin-1"):
+        try:
+            text = head.decode(enc, errors="ignore")
+            break
+        except Exception:
+            continue
+    else:
+        text = ""
+
+    # XML declaration first.
+    m = re.search(r"<\?xml[^>]*encoding=['\"]\s*([A-Za-z0-9_\-]+)\s*['\"]", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # <meta charset="...">
+    m = re.search(r"<meta[^>]+charset=['\"]?\s*([A-Za-z0-9_\-]+)\s*['\"]?", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # <meta http-equiv="Content-Type" content="text/html; charset=...">
+    m = re.search(
+        r"<meta[^>]+http-equiv=['\"]content-type['\"][^>]+content=['\"][^'\"]*charset=\s*([A-Za-z0-9_\-]+)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+
+    return ""
+
+
+def _canonical_codec_name(name: str) -> str:
+    n = (name or "").strip().lower().replace("_", "-")
+    mapping = {
+        "shift-jis": "cp932",
+        "shift_jis": "cp932",
+        "sjis": "cp932",
+        "ms932": "cp932",
+        "x-sjis": "cp932",
+        "windows-31j": "cp932",
+    }
+    return mapping.get(n, n)
+
+
+def decode_html(raw: bytes, content_type: str) -> tuple[str, str]:
+    candidates: list[str] = []
+
+    header_charset = _extract_charset_from_content_type(content_type)
+    declared_charset = _extract_declared_charset(raw)
+    if header_charset:
+        candidates.append(_canonical_codec_name(header_charset))
+    if declared_charset:
+        candidates.append(_canonical_codec_name(declared_charset))
+
+    # Common fallbacks for JP government pages.
+    candidates.extend(["utf-8", "cp932", "shift_jis", "euc_jp", "iso2022_jp"])
+
+    seen = set()
+    ordered: list[str] = []
+    for c in candidates:
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        ordered.append(c)
+
+    for codec in ordered:
+        try:
+            return raw.decode(codec), codec
+        except (LookupError, UnicodeDecodeError):
+            continue
+
+    # Last resort.
     try:
-        return raw.decode(charset, errors="replace")
-    except LookupError:
-        return raw.decode("utf-8", errors="replace")
+        return raw.decode("utf-8", errors="replace"), "utf-8(replace)"
+    except Exception:
+        return raw.decode(errors="replace"), "unknown(replace)"
 
 
 class PdfLinkExtractor(HTMLParser):
@@ -188,6 +267,55 @@ def render_pdf_links(entries: List[dict[str, str]]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+def classify_document_category(title: str, filename: str) -> str:
+    title_norm = _normalize_inline_text(title)
+    title_lower = title_norm.lower()
+    filename_lower = filename.lower()
+
+    if any(kw in title_norm for kw in ["議事次第", "次第"]):
+        return "agenda"
+    if any(kw in title_norm for kw in ["議事録", "議事要旨", "会議録", "議事概要"]):
+        return "minutes"
+    if any(kw in title_norm for kw in ["委員名簿", "出席者名簿"]):
+        return "participants"
+    if any(kw in title_norm for kw in ["座席表", "座席配置"]):
+        return "seating"
+    if any(kw in title_norm for kw in ["公開方法", "傍聴"]):
+        return "disclosure_method"
+    if any(
+        kw in title_norm
+        for kw in ["とりまとめ", "取りまとめ", "概要", "Executive Summary", "エグゼクティブサマリー"]
+    ):
+        return "executive_summary"
+    if "参考資料" in title_norm or "参考" in title_norm or "sankou" in filename_lower:
+        return "reference"
+    if re.match(r"^資料\s*\d+", title_norm) or re.match(r"^資料\d+", title_norm):
+        return "material"
+    if "gijiroku" in filename_lower or "gijiyoshi" in filename_lower or "minutes" in filename_lower:
+        return "minutes"
+    return "other"
+
+
+def build_pdf_link_records(entries: List[dict[str, str]]) -> List[dict[str, str]]:
+    records: List[dict[str, str]] = []
+    for e in entries:
+        url = (e.get("url") or "").strip()
+        if not url:
+            continue
+        text = _normalize_inline_text(e.get("text", ""))
+        path_name = Path(unquote(urlparse(url).path)).name
+        category = classify_document_category(text, path_name)
+        records.append(
+            {
+                "text": text,
+                "url": url,
+                "filename": path_name,
+                "estimated_category": category,
+            }
+        )
+    return records
+
+
 def make_run_id() -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     suffix = uuid4().hex[:6]
@@ -228,7 +356,7 @@ def main() -> int:
     except FetchError as exc:
         raise SystemExit(str(exc))
 
-    html_text = decode_html(result.body, result.content_type)
+    html_text, detected_encoding = decode_html(result.body, result.content_type)
     extractor = PdfLinkExtractor(result.final_url)
     extractor.feed(html_text)
     pdf_links = dedupe_keep_order(extractor.links)
@@ -239,12 +367,15 @@ def main() -> int:
 
     html_path = out_dir / "source.html"
     links_path = out_dir / "pdf-links.txt"
+    links_json_path = out_dir / "pdf-links.json"
     metadata_path = out_dir / "metadata.json"
     source_md_path = out_dir / "source.md"
     docling_raw_path = out_dir / "docling-response.json"
 
     html_path.write_text(html_text, encoding="utf-8")
+    pdf_link_records = build_pdf_link_records(pdf_links)
     links_path.write_text(render_pdf_links(pdf_links), encoding="utf-8")
+    links_json_path.write_text(json.dumps(pdf_link_records, ensure_ascii=False, indent=2), encoding="utf-8")
 
     metadata = {
         "run_id": run_id,
@@ -253,10 +384,12 @@ def main() -> int:
         "final_url": result.final_url,
         "status_code": result.status_code,
         "content_type": result.content_type,
+        "detected_encoding": detected_encoding,
         "used_browser_headers": result.used_browser_headers,
         "pdf_link_count": len(pdf_links),
         "source_html_path": str(html_path),
         "pdf_links_path": str(links_path),
+        "pdf_links_json_path": str(links_json_path),
         "docling": {
             "enabled": True,
             "endpoint": args.docling_endpoint,
