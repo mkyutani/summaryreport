@@ -242,6 +242,18 @@ def _apply_adjustment_rules(scored: list[dict[str, Any]]) -> None:
 
 
 def _safe_filename_part(text: str) -> str:
+    def _truncate_utf8_bytes(v: str, max_bytes: int) -> str:
+        b = v.encode("utf-8")
+        if len(b) <= max_bytes:
+            return v
+        cut = b[:max_bytes]
+        while cut:
+            try:
+                return cut.decode("utf-8")
+            except UnicodeDecodeError:
+                cut = cut[:-1]
+        return ""
+
     s = _normalize_text(text)
     s = s.replace("\n", " ").replace("\r", " ").replace("\t", " ")
     s = re.sub(r"[\x00-\x1f\x7f]", "", s)
@@ -251,9 +263,11 @@ def _safe_filename_part(text: str) -> str:
     s = s.strip("._ ")
     if not s:
         s = "pdf"
-    # Keep filename reasonably short to avoid OS/path length issues.
-    if len(s) > 80:
-        s = s[:80].rstrip("._ ")
+    # Keep filename safely short by UTF-8 byte length to avoid OS/path limits.
+    # (Japanese chars are multibyte, so char-count based truncation is insufficient.)
+    s = _truncate_utf8_bytes(s, 120).rstrip("._ ")
+    if not s:
+        s = "pdf"
     return s
 
 
