@@ -464,6 +464,8 @@ def _extract_minutes_to_markdown(
                 result["error"] = f"docling conversion failed: {exc}"
 
     else:
+        # Clear stale artifact from previous runs/retries to avoid downstream contamination.
+        out_md_path.write_text("", encoding="utf-8")
         result["error"] = "minutes source type is none; nothing to extract"
 
     out_meta_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

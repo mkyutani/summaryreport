@@ -80,6 +80,18 @@ def _step9_review_schema() -> dict[str, Any]:
     }
 
 
+def _step9_polish_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "abstract_ja": {"type": "string"},
+            "overall_summary_ja": {"type": "string"},
+        },
+        "required": ["abstract_ja", "overall_summary_ja"],
+    }
+
+
 def _call_llm(system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
@@ -117,16 +129,62 @@ def _call_llm(system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any
     return json.loads(content)
 
 
+def _call_llm_polish(polish_payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+
+    system_prompt = (
+        "You are a Japanese editor. "
+        "Polish wording and readability only; preserve all factual content and coverage. "
+        "Do not add or remove substantive points. "
+        "Keep concise abstract style and natural openings."
+    )
+    body = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(polish_payload, ensure_ascii=False)},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "step9_polish", "schema": _step9_polish_schema(), "strict": True},
+        },
+    }
+
+    req = request.Request(
+        f"{OPENAI_API_BASE}/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with request.urlopen(req, timeout=180) as resp:
+            raw = resp.read()
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"LLM polish failed: {exc.code} {detail}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"LLM polish failed: {exc}") from exc
+
+    data = json.loads(raw.decode("utf-8", errors="replace"))
+    content = data["choices"][0]["message"]["content"]
+    return json.loads(content)
+
+
 def _call_llm_review(review_payload: dict[str, Any]) -> dict[str, Any]:
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
 
     system_prompt = (
-        "You are a strict reviewer for Japanese summaries. "
-        "Reject summaries that are mostly page-description or link/list explanation. "
-        "Accept summaries that explain substantive meeting/report themes and what is examined. "
-        "Focus especially on 'ページには/掲載されている/資料が並ぶだけ' style."
+        "You are a strict reviewer for Japanese abstracts. "
+        "Judge whether abstract_ja is valid as an abstract, not just grammatically correct. "
+        "Reject if abstract_ja is mostly page description, link/list explanation, or awkward lead-in. "
+        "Accept only when abstract_ja concisely explains the substantive topic, focus, and scope. "
+        "Use strict acceptance: if you can suggest any wording improvement (readability, opening, phrasing, flow), "
+        "then set is_ok=false and needs_regeneration=true. "
+        "Only return is_ok=true when no improvement is needed."
     )
     body = {
         "model": OPENAI_MODEL,
@@ -206,13 +264,36 @@ def _cleanup_meta_phrasing(text: str) -> str:
     if not text:
         return text
     t = text
-    t = re.sub(r"議事次第[:：]\s*", "", t)
+    t = re.sub(r"議事次第\s*[:：]\s*", "", t)
+    t = re.sub(r"議事次第は", "", t)
+    t = re.sub(r"会議案内には", "本会合では", t)
+    t = re.sub(r"ページ上では", "本会合では", t)
     t = t.replace("ページには", "本会合では")
     t = t.replace("ページ上には", "本会合では")
     t = t.replace("掲載されている", "示されている")
+    t = t.replace("主要議題とする。", "主要議題とした。")
+    t = t.replace("主要議題とする", "主要議題とした")
+    # Normalize awkward lead-in like "...議事次第 本会合では"
+    t = re.sub(r"^(.{0,120}?)議事次第\s*本会合では", r"\1では", t)
+    t = re.sub(r"^(.{0,120}?)議事次第\s*では", r"\1では", t)
     t = re.sub(r"(第[0-9０-９]+回)\s+\1", r"\1", t)
     t = re.sub(r"\s{2,}", " ", t).strip()
     return t
+
+
+def _contains_banned_meta_phrase(text: str) -> bool:
+    if not text:
+        return False
+    patterns = [
+        r"議事次第\s*[:：]",
+        r"議事次第\s*本会合では",
+        r"議事次第\s*では",
+        r"ページには",
+        r"ページ上では",
+        r"会議案内には",
+        r"以下の資料",
+    ]
+    return any(re.search(p, text) is not None for p in patterns)
 
 
 def _dedupe_round_repetition(text: str) -> str:
@@ -252,6 +333,7 @@ def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_
         return (
             common
             + " This is a MEETING page with no usable minutes and no material summaries. "
+            "Write in past tense because the meeting has already been held. "
             "Describe only what is explicitly present on the page (agenda/theme/high-level context). "
             "Do not enumerate individual linked document titles. "
             "Do not describe discussion details, opinions, or decisions. "
@@ -273,11 +355,13 @@ def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_
         return (
             common
             + " This is a MEETING page with minutes available. "
+            "Write in past tense because the meeting has already been held. "
             "Integrate meeting context, materials, and minutes-derived discussion flow."
         )
     return (
         common
         + " This is a MEETING page but minutes are unavailable. "
+        "Write in past tense because the meeting has already been held. "
         "Summarize only available meeting/material content without mentioning missing minutes."
     )
 
@@ -331,6 +415,8 @@ def _build_user_payload(
         if len(linked_documents) >= 20:
             break
 
+    minutes_excerpt = _trim_chars(minutes_md, 4000) if minutes_available else ""
+
     return {
         "page_type": page_type,
         "meeting_name": meeting_name,
@@ -340,7 +426,7 @@ def _build_user_payload(
         "minutes": {
             "source_type": minutes_source.get("type", "none"),
             "available": minutes_available,
-            "summary_excerpt": _trim_chars(minutes_md, 4000),
+            "summary_excerpt": minutes_excerpt,
         },
         "materials": normalized_docs,
         "linked_documents": linked_documents,
@@ -380,7 +466,7 @@ def _review_and_regenerate(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     history: list[dict[str, Any]] = []
     current = generated
-    prompt = system_prompt
+    polished_once = False
 
     for _ in range(max_regen + 1):
         abstract = _normalize_summary_opening(str(current.get("abstract_ja", "")).strip())
@@ -394,21 +480,51 @@ def _review_and_regenerate(
             "abstract_ja": abstract,
             "overall_summary_ja": overall,
             "criteria": [
-                "ページ説明文・リンク説明文に偏っていないこと",
-                "実質的な議題・政策テーマ・検討対象が記述されていること",
-                "単なる資料名列挙や掲載案内になっていないこと",
+                "abstract_jaが要約（Abstract）として成立していること（ページ紹介文ではない）",
+                "対象・論点・検討範囲が簡潔に記述されていること",
+                "資料名列挙やリンク案内に偏っていないこと",
+                "文頭が不自然でないこと（例: 『議事次第 本会合では』のような形を避ける）",
             ],
         }
         review = _call_llm_review(review_payload)
+        if _contains_banned_meta_phrase(abstract) or _contains_banned_meta_phrase(overall):
+            review = {
+                "is_ok": False,
+                "needs_regeneration": True,
+                "feedback": "禁止メタ表現（例: 議事次第：/議事次第 本会合では/ページには/以下の資料）が残っている",
+            }
         history.append(review)
+        feedback = str(review.get("feedback", "")).strip()
         if bool(review.get("is_ok")) and not bool(review.get("needs_regeneration")):
             return current, history
 
-        feedback = str(review.get("feedback", "")).strip()
+        if not polished_once:
+            polish_payload = {
+                "page_type": user_payload.get("page_type", ""),
+                "meeting_name": user_payload.get("meeting_name", ""),
+                "feedback": feedback,
+                "constraints": [
+                    "内容の追加・削除をしない（事実と論点の範囲を維持）",
+                    "文体と語順を整え、Abstractとして自然な日本語にする",
+                    "ページ説明調・資料列挙調・不自然な冒頭を避ける",
+                ],
+                "abstract_ja": abstract,
+                "overall_summary_ja": overall,
+            }
+            polished = _call_llm_polish(polish_payload)
+            current = {
+                **current,
+                "abstract_ja": str(polished.get("abstract_ja", abstract)),
+                "overall_summary_ja": str(polished.get("overall_summary_ja", overall)),
+            }
+            polished_once = True
+            continue
+
         prompt = (
             system_prompt
             + " Regeneration required after quality review. "
-            + "Fix issues and avoid page-description style. "
+            + "Rewrite abstract_ja so it is valid as an abstract: concise, substantive, and natural Japanese. "
+            + "Avoid page-description/listing style and awkward openings. "
             + ("Feedback: " + feedback if feedback else "")
         )
         current = _generate_with_retry(prompt, user_payload)
@@ -471,11 +587,15 @@ def main() -> int:
 
     abstract = _normalize_summary_opening(str(generated.get("abstract_ja", "")).strip())
     overall = str(generated.get("overall_summary_ja", "")).strip()
-    # Keep this behavior prompt-driven: no extra text-shaping for page-structure phrasing.
+    abstract = _cleanup_meta_phrasing(abstract)
+    overall = _cleanup_meta_phrasing(overall)
     abstract = _strip_absence_statements(abstract)
     overall = _strip_absence_statements(overall)
     abstract = _dedupe_round_repetition(abstract)
     overall = _dedupe_round_repetition(overall)
+    # Final hard guard for recurring meta phrases.
+    abstract = _cleanup_meta_phrasing(abstract)
+    overall = _cleanup_meta_phrasing(overall)
     auto_minutes_note = _minutes_note_metadata(page_type, minutes_available)
 
     payload = {
