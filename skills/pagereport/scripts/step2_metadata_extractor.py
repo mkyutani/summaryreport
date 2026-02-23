@@ -13,7 +13,7 @@ from urllib import error, request
 from urllib.parse import urlparse
 
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-OPENAI_MODEL = os.getenv("PAGEREPORT_STEP2_MODEL", "gpt-4.1-mini")
+OPENAI_MODEL = os.getenv("PAGEREPORT_STEP2_MODEL", "gpt-5-mini")
 
 
 def _read_text(path: Optional[str]) -> str:
