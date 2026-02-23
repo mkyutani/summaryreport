@@ -34,6 +34,19 @@ def _read_json(path: Path) -> dict[str, Any]:
     return parsed
 
 
+def _read_json_list(path: Path) -> list[Any]:
+    raw = _read_text(path)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return parsed
+
+
 def _trim_chars(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
@@ -69,7 +82,6 @@ def _call_llm(system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any
             "type": "json_schema",
             "json_schema": {"name": "step9_integrated_summary", "schema": _step9_schema(), "strict": True},
         },
-        "temperature": 0,
     }
 
     req = request.Request(
@@ -100,6 +112,24 @@ def _normalize_summary_opening(text: str) -> str:
     return normalized
 
 
+def _strip_meta_page_leadin(text: str) -> str:
+    if not text:
+        return text
+    t = text.strip()
+    patterns = [
+        re.compile(r"^.{0,120}を掲載するページ。"),
+        re.compile(r"^.{0,120}をまとめたページ。"),
+        re.compile(r"^.{0,120}のページ。"),
+    ]
+    for pat in patterns:
+        m = pat.match(t)
+        if m:
+            rest = t[m.end() :].lstrip()
+            if rest:
+                return rest
+    return t
+
+
 def _strip_absence_statements(text: str) -> str:
     if not text:
         return text
@@ -124,15 +154,25 @@ def _minutes_note_metadata(page_type: str, minutes_available: bool) -> str:
     return "議事録は未取得。"
 
 
-def _build_system_prompt(page_type: str, minutes_available: bool) -> str:
+def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_empty: int) -> str:
     common = (
         "You generate an integrated Japanese summary from structured inputs. "
         "Use only provided facts; do not infer unstated details. "
         "Keep abstract_ja within 1500 Japanese characters. "
+        "abstract_ja must be one prose paragraph (no bullets, no list numbering, no line breaks). "
         "Do not start abstract_ja with generic lead-ins like '本資料は'. "
         "overall_summary_ja may be longer but keep it concise and factual. "
         "Do not include lack-of-data statements such as missing minutes/materials in abstract_ja or overall_summary_ja."
     )
+    if page_type == "MEETING" and (not minutes_available) and materials_non_empty == 0:
+        return (
+            common
+            + " This is a MEETING page with no usable minutes and no material summaries. "
+            "Describe only what is explicitly present on the page and its linked document titles. "
+            "Do not describe discussion details, opinions, or decisions. "
+            "Write in meeting style: start with the meeting name/round and agenda, "
+            "not with meta page-description phrases like '...を掲載するページ'."
+        )
     if page_type == "REPORT":
         return (
             common
@@ -158,6 +198,7 @@ def _build_user_payload(
     step4_extract: dict[str, Any],
     minutes_md: str,
     step8: dict[str, Any],
+    pdf_links: list[Any],
 ) -> dict[str, Any]:
     page_type = str(step2.get("page_type", "UNKNOWN"))
     meeting_name = str(step2.get("meeting_name", {}).get("value", ""))
@@ -187,6 +228,19 @@ def _build_user_payload(
             }
         )
 
+    linked_documents: list[dict[str, str]] = []
+    for item in pdf_links:
+        if not isinstance(item, dict):
+            continue
+        linked_documents.append(
+            {
+                "title": str(item.get("text", "")),
+                "url": str(item.get("url", "")),
+            }
+        )
+        if len(linked_documents) >= 20:
+            break
+
     return {
         "page_type": page_type,
         "meeting_name": meeting_name,
@@ -199,6 +253,7 @@ def _build_user_payload(
             "summary_excerpt": _trim_chars(minutes_md, 4000),
         },
         "materials": normalized_docs,
+        "linked_documents": linked_documents,
     }
 
 
@@ -236,6 +291,7 @@ def main() -> int:
     parser.add_argument("--minutes-extraction-file", default="", help="minutes-extraction.json path")
     parser.add_argument("--minutes-md-file", default="", help="minutes markdown path")
     parser.add_argument("--step8-file", default="", help="step8-material-summaries.json path")
+    parser.add_argument("--pdf-links-file", default="", help="pdf-links.json path")
     parser.add_argument("--output-file", default="", help="Step9 output path")
     args = parser.parse_args()
 
@@ -249,12 +305,14 @@ def main() -> int:
     )
     minutes_md_path = Path(args.minutes_md_file) if args.minutes_md_file else run_dir / "minutes.md"
     step8_path = Path(args.step8_file) if args.step8_file else run_dir / "step8-material-summaries.json"
+    pdf_links_path = Path(args.pdf_links_file) if args.pdf_links_file else run_dir / "pdf-links.json"
     out_path = Path(args.output_file) if args.output_file else run_dir / "step9-summary.json"
 
     step2 = _read_json(step2_path)
     step4_source = _read_json(minutes_source_path)
     step4_extract = _read_json(minutes_extract_path)
     step8 = _read_json(step8_path)
+    pdf_links = _read_json_list(pdf_links_path)
     minutes_md = _read_text(minutes_md_path)
 
     if not step2:
@@ -266,21 +324,22 @@ def main() -> int:
     minutes_source = step4_source.get("minutes_source", {}) if isinstance(step4_source, dict) else {}
     minutes_available = bool(step4_extract.get("succeeded", False) and minutes_source.get("type") in {"html", "pdf"})
 
-    system_prompt = _build_system_prompt(page_type, minutes_available)
-    user_payload = _build_user_payload(step2, step4_source, step4_extract, minutes_md, step8)
-    generated = _generate_with_retry(system_prompt, user_payload)
-
-    abstract = _normalize_summary_opening(str(generated.get("abstract_ja", "")).strip())
-    overall = str(generated.get("overall_summary_ja", "")).strip()
-    abstract = _strip_absence_statements(abstract)
-    overall = _strip_absence_statements(overall)
-    auto_minutes_note = _minutes_note_metadata(page_type, minutes_available)
-
     materials = step8.get("per_document", [])
     materials_count = len(materials) if isinstance(materials, list) else 0
     materials_non_empty = 0
     if isinstance(materials, list):
         materials_non_empty = len([d for d in materials if isinstance(d, dict) and not d.get("empty_content", False)])
+
+    system_prompt = _build_system_prompt(page_type, minutes_available, materials_non_empty)
+    user_payload = _build_user_payload(step2, step4_source, step4_extract, minutes_md, step8, pdf_links)
+    generated = _generate_with_retry(system_prompt, user_payload)
+
+    abstract = _normalize_summary_opening(str(generated.get("abstract_ja", "")).strip())
+    abstract = _strip_meta_page_leadin(abstract)
+    overall = str(generated.get("overall_summary_ja", "")).strip()
+    abstract = _strip_absence_statements(abstract)
+    overall = _strip_absence_statements(overall)
+    auto_minutes_note = _minutes_note_metadata(page_type, minutes_available)
 
     payload = {
         "run_id": args.run_id,
@@ -290,6 +349,7 @@ def main() -> int:
             "minutes_extraction_file": str(minutes_extract_path),
             "minutes_md_file": str(minutes_md_path),
             "step8_file": str(step8_path),
+            "pdf_links_file": str(pdf_links_path),
             "model": OPENAI_MODEL,
         },
         "page_type": page_type,

@@ -265,7 +265,6 @@ def _call_llm(md_text: str, url: str, pdf_count: int, source_meta: dict[str, str
                 "strict": True,
             },
         },
-        "temperature": 0,
     }
 
     req = request.Request(

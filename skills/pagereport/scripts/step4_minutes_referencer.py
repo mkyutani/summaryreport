@@ -30,6 +30,30 @@ MINUTES_PDF_KEYWORDS = [
 ]
 
 
+def _normalize_digits(text: str) -> str:
+    return text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+
+
+def _extract_round_numbers(text: str) -> list[int]:
+    s = _normalize_digits(text or "")
+    values: list[int] = []
+    seen = set()
+    patterns = [
+        re.compile(r"第\s*([0-9]+)\s*回"),
+        re.compile(r"dai[_-]?([0-9]+)", re.IGNORECASE),
+    ]
+    for pat in patterns:
+        for m in pat.finditer(s):
+            try:
+                n = int(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if n not in seen:
+                seen.add(n)
+                values.append(n)
+    return values
+
+
 def _read_text(path: Path) -> str:
     if not path.exists():
         return ""
@@ -223,7 +247,12 @@ def _prefer_new_text(old_text: str, new_text: str) -> bool:
     return False
 
 
-def _find_minutes_pdf(pdf_links_text: str, md_text: str, base_url: str) -> dict:
+def _find_minutes_pdf(
+    pdf_links_text: str,
+    md_text: str,
+    base_url: str,
+    expected_round: Optional[int] = None,
+) -> dict:
     entries = []
     for ln in pdf_links_text.splitlines():
         parsed = _parse_pdf_link_line(ln)
@@ -252,30 +281,82 @@ def _find_minutes_pdf(pdf_links_text: str, md_text: str, base_url: str) -> dict:
 
     scored = []
     for e in dedup.values():
+        text = e.get("text", "")
+        url = e.get("url", "")
+        url_basename = Path(urlparse(url).path).name
+        rounds_in_entry = _extract_round_numbers(f"{text} {url_basename}")
+        round_mismatch = bool(
+            expected_round is not None
+            and rounds_in_entry
+            and expected_round not in rounds_in_entry
+        )
+        score = _score_minutes_pdf_entry(e)
+        if round_mismatch:
+            score -= 100
         scored.append(
             {
-                "text": e.get("text", ""),
-                "url": e.get("url", ""),
-                "score": _score_minutes_pdf_entry(e),
+                "text": text,
+                "url": url,
+                "score": score,
                 "has_minutes_signal": _has_minutes_signal(e),
+                "rounds_in_entry": rounds_in_entry,
+                "round_mismatch": round_mismatch,
             }
         )
 
     scored.sort(key=lambda x: x["score"], reverse=True)
-    best = scored[0]
+    eligible = [c for c in scored if c.get("has_minutes_signal", False) and not c.get("round_mismatch", False)]
+    if not eligible:
+        return {
+            "found": False,
+            "reason": "no minutes-like PDF matched the page round",
+            "expected_round": expected_round,
+            "candidates": scored,
+        }
+    best = eligible[0]
     if not best.get("has_minutes_signal", False):
         return {
             "found": False,
             "reason": "no minutes-like keyword in PDF link text/URLs",
+            "expected_round": expected_round,
             "candidates": scored,
         }
 
     return {
         "found": True,
         "reason": "minutes-like keyword matched in PDF URL",
+        "expected_round": expected_round,
         "selected": best,
         "candidates": scored,
     }
+
+
+def _extract_expected_round(md_text: str, metadata_text: str, base_url: str) -> Optional[int]:
+    frontmatter, _ = _extract_frontmatter_and_body(md_text)
+    probes: list[str] = [
+        frontmatter.get("source_title", ""),
+        frontmatter.get("source_og_title", ""),
+        base_url,
+    ]
+    if metadata_text:
+        try:
+            meta = json.loads(metadata_text)
+            if isinstance(meta, dict):
+                probes.extend(
+                    [
+                        str(meta.get("title", "")),
+                        str(meta.get("final_url", "")),
+                        str(meta.get("input_url", "")),
+                    ]
+                )
+        except json.JSONDecodeError:
+            pass
+
+    for p in probes:
+        rounds = _extract_round_numbers(p)
+        if rounds:
+            return rounds[0]
+    return None
 
 
 def _build_output(
@@ -433,8 +514,9 @@ def main() -> int:
         except json.JSONDecodeError:
             base_url = ""
 
+    expected_round = _extract_expected_round(md_text, metadata_text, base_url)
     html_result = _find_minutes_in_markdown(md_text)
-    pdf_result = _find_minutes_pdf(pdf_links_text, md_text, base_url)
+    pdf_result = _find_minutes_pdf(pdf_links_text, md_text, base_url, expected_round=expected_round)
     # Remove heavy inline section body from non-selected candidates before writing.
     for c in html_result.get("candidates", []):
         if "section_body" in c:

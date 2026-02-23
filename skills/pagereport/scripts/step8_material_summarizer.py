@@ -210,7 +210,6 @@ def _call_llm(doc: dict[str, Any], prepared_text: str) -> dict[str, Any]:
             "type": "json_schema",
             "json_schema": {"name": "step8_material_summary", "schema": _response_schema(), "strict": True},
         },
-        "temperature": 0,
     }
 
     req = request.Request(
