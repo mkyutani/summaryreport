@@ -289,7 +289,14 @@ def classify_document_category(title: str, filename: str) -> str:
         return "executive_summary"
     if "参考資料" in title_norm or "参考" in title_norm or "sankou" in filename_lower:
         return "reference"
-    if re.match(r"^資料\s*\d+", title_norm) or re.match(r"^資料\d+", title_norm):
+    if (
+        re.match(r"^資料\s*\d+", title_norm)
+        or re.match(r"^資料\d+", title_norm)
+        or re.match(r"^資料\s*[:：]", title_norm)
+        or "説明資料" in title_norm
+        or "事務局資料" in title_norm
+        or re.search(r"[^\s]+(?:省|府|庁)説明資料", title_norm)
+    ):
         return "material"
     if "gijiroku" in filename_lower or "gijiyoshi" in filename_lower or "minutes" in filename_lower:
         return "minutes"

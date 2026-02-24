@@ -5,12 +5,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
+from urllib import error, request
 from urllib.parse import unquote, urlparse
 
 from fetch_with_retry import FetchError, fetch_url
+
+OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+OPENAI_MODEL = os.getenv("PAGEREPORT_STEP5_MODEL", "gpt-5-mini")
 
 BASE_SCORES = {
     "executive_summary": 5,
@@ -104,11 +109,79 @@ def _classify_document(title: str, filename: str) -> str:
         return "executive_summary"
     if "参考資料" in t or "参考" in t or "sankou" in fl:
         return "reference"
+    if (
+        re.match(r"^資料\s*[：:]", t)
+        or "説明資料" in t
+        or "事務局資料" in t
+        or re.search(r"[^\s]+(?:省|府|庁)説明資料", t)
+    ):
+        return "material"
     if re.match(r"^資料\s*\d+", t) or re.match(r"^資料\d+", t):
         return "material"
     if "gijiroku" in fl or "gijiyoshi" in fl or "minutes" in fl:
         return "minutes"
     return "other"
+
+
+def _llm_classify_document(title: str, filename: str, url: str) -> str:
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "category": {
+                "type": "string",
+                "enum": list(BASE_SCORES.keys()),
+            }
+        },
+        "required": ["category"],
+    }
+    body = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Classify Japanese government PDF links. "
+                    "Use title/filename/url only. "
+                    "If title indicates substantive material like '資料', "
+                    "'説明資料', '事務局資料', or '○○省/府/庁説明資料', prefer 'material'. "
+                    "But if title clearly says '参考資料', classify as 'reference'."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"title": title, "filename": filename, "url": url},
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "step5_category", "schema": schema, "strict": True},
+        },
+    }
+    req = request.Request(
+        f"{OPENAI_API_BASE}/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with request.urlopen(req, timeout=60) as resp:
+            raw = resp.read()
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"LLM request failed: {exc.code} {detail}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"LLM request failed: {exc}") from exc
+    data = json.loads(raw.decode("utf-8", errors="replace"))
+    parsed = json.loads(data["choices"][0]["message"]["content"])
+    return str(parsed.get("category", "other"))
 
 
 def _parse_links_txt(path: Path) -> list[dict[str, str]]:
@@ -435,9 +508,22 @@ def main() -> int:
 
     has_exec_summary = any((x.get("estimated_category") or "") == "executive_summary" for x in items)
 
+    use_llm = os.getenv("PAGEREPORT_STEP5_LLM_CLASSIFY", "1") != "0"
+    llm_errors: list[str] = []
     scored: list[dict[str, Any]] = []
     for it in items:
-        category = it.get("estimated_category") or _classify_document(it.get("text", ""), it.get("filename", ""))
+        estimated = (it.get("estimated_category") or "").strip()
+        if estimated and estimated != "other":
+            category = estimated
+        else:
+            category = _classify_document(it.get("text", ""), it.get("filename", ""))
+        if use_llm and category == "other":
+            try:
+                llm_cat = _llm_classify_document(it.get("text", ""), it.get("filename", ""), it.get("url", ""))
+                if llm_cat in BASE_SCORES:
+                    category = llm_cat
+            except Exception as exc:
+                llm_errors.append(str(exc))
         base = BASE_SCORES.get(category, BASE_SCORES["other"])
         file_bonus = _filename_bonus(it.get("filename", ""))
         material_id = _material_id_from_text(it.get("text", ""), it.get("filename", ""))
@@ -533,6 +619,7 @@ def main() -> int:
         "selected_pdfs": selected,
         "deferred_decisions": deferred_decisions,
         "downloaded_files": downloads,
+        "llm_classification": {"enabled": use_llm, "errors": llm_errors},
     }
 
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
