@@ -348,8 +348,10 @@ def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_
     if page_type == "REPORT":
         return (
             common
-            + " This is a REPORT page. Focus on policy/report content and key points from materials. "
-            "Do not describe meeting discussions as if spoken proceedings existed."
+            + " This is a REPORT page. Focus on report body content first, then materials. "
+            "Do not describe meeting discussions as if spoken proceedings existed. "
+            "When the source presents numbered pillars/sections, preserve that structure in the summary. "
+            "Inline numbered points like '(1)... (2)...' in prose are allowed."
         )
     if minutes_available:
         return (
@@ -373,6 +375,7 @@ def _build_user_payload(
     minutes_md: str,
     step8: dict[str, Any],
     pdf_links: list[Any],
+    body_digest: dict[str, Any],
 ) -> dict[str, Any]:
     page_type = str(step2.get("page_type", "UNKNOWN"))
     meeting_name = str(step2.get("meeting_name", {}).get("value", ""))
@@ -430,6 +433,18 @@ def _build_user_payload(
         },
         "materials": normalized_docs,
         "linked_documents": linked_documents,
+        "body_digest": {
+            "available": bool(body_digest),
+            "source_type": str(body_digest.get("source_type", "none")),
+            "digest_ja": _trim_chars(str(body_digest.get("digest_ja", "")), 6000),
+            "key_points": (
+                body_digest.get("key_points", [])[:12]
+                if isinstance(body_digest.get("key_points"), list)
+                else []
+            ),
+            # Keep raw text for traceability and edge cases; truncated for token control.
+            "raw_body_text": _trim_chars(str(body_digest.get("raw_body_text", "")), 12000),
+        },
     }
 
 
@@ -556,6 +571,7 @@ def main() -> int:
     minutes_md_path = Path(args.minutes_md_file) if args.minutes_md_file else run_dir / "minutes.md"
     step8_path = Path(args.step8_file) if args.step8_file else run_dir / "step8-material-summaries.json"
     pdf_links_path = Path(args.pdf_links_file) if args.pdf_links_file else run_dir / "pdf-links.json"
+    body_digest_path = run_dir / "body-digest.json"
     out_path = Path(args.output_file) if args.output_file else run_dir / "step9-summary.json"
 
     step2 = _read_json(step2_path)
@@ -563,6 +579,7 @@ def main() -> int:
     step4_extract = _read_json(minutes_extract_path)
     step8 = _read_json(step8_path)
     pdf_links = _read_json_list(pdf_links_path)
+    body_digest = _read_json(body_digest_path)
     minutes_md = _read_text(minutes_md_path)
 
     if not step2:
@@ -581,7 +598,7 @@ def main() -> int:
         materials_non_empty = len([d for d in materials if isinstance(d, dict) and not d.get("empty_content", False)])
 
     system_prompt = _build_system_prompt(page_type, minutes_available, materials_non_empty)
-    user_payload = _build_user_payload(step2, step4_source, step4_extract, minutes_md, step8, pdf_links)
+    user_payload = _build_user_payload(step2, step4_source, step4_extract, minutes_md, step8, pdf_links, body_digest)
     generated = _generate_with_retry(system_prompt, user_payload)
     generated, review_history = _review_and_regenerate(system_prompt, user_payload, generated, max_regen=1)
 
@@ -607,6 +624,7 @@ def main() -> int:
             "minutes_md_file": str(minutes_md_path),
             "step8_file": str(step8_path),
             "pdf_links_file": str(pdf_links_path),
+            "body_digest_file": str(body_digest_path),
             "model": OPENAI_MODEL,
             "quality_review_enabled": True,
         },
