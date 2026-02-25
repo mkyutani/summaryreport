@@ -45,6 +45,14 @@ def _extract_heading_texts(md_text: str) -> list[str]:
     return headings
 
 
+def _first_non_empty_line(text: str) -> str:
+    for line in text.splitlines():
+        s = _normalize(line)
+        if s:
+            return s
+    return ""
+
+
 def _heading_based_page_type(md_text: str) -> Optional[str]:
     headings = _extract_heading_texts(md_text)
     if not headings:
@@ -217,7 +225,14 @@ def _schema() -> dict[str, Any]:
     }
 
 
-def _call_llm(md_text: str, url: str, pdf_count: int, source_meta: dict[str, str]) -> dict[str, Any]:
+def _call_llm(
+    md_text: str,
+    url: str,
+    pdf_count: int,
+    source_meta: dict[str, str],
+    mode: str,
+    first_page_text: str,
+) -> dict[str, Any]:
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
@@ -230,23 +245,25 @@ def _call_llm(md_text: str, url: str, pdf_count: int, source_meta: dict[str, str
             break
 
     system_prompt = (
-        "You are a precise metadata extractor for Japanese government pages. "
-        "Extract only what is supported by the provided markdown content. "
+        "You are a precise metadata extractor for Japanese government pages and documents. "
+        "Extract only what is supported by the provided content. "
         "Follow these strict rules in priority order:\\n"
-        "1) meeting_name: Use the first level-1 markdown heading ('# ...') as the primary source. "
-        "Only return null when that heading is missing and no reliable alternative exists.\\n"
-        "2) Fallback for meeting_name: source_og_title, source_title, then explicit labels in body.\\n"
-        "3) date_iso: choose the date that represents the page subject/event itself, not merely a historical/reference date list. "
-        "If multiple dates exist, prefer the one closest to the main heading/summary context.\\n"
-        "4) round_number/round_text: extract only when clearly tied to the page subject. "
-        "Ignore unrelated counters such as national assembly session numbers unless clearly the page subject.\\n"
-        "5) If uncertain, use null, but do not output null for meeting_name when a clear level-1 heading exists."
+        "1) For HTML mode, meeting_name: use first level-1 markdown heading ('# ...') as primary source. "
+        "Only return null when no reliable candidate exists.\\n"
+        "2) For PDF mode, meeting_name: prioritize first_page_text (page 1 text) over filename/URL. "
+        "Use formal document/report name appearing on page 1. Do not use filename-derived guesses.\\n"
+        "3) date_iso: choose the date representing the page/document subject itself, not historical reference lists.\\n"
+        "4) round_number/round_text: extract only when clearly tied to the page/document subject. "
+        "Ignore unrelated counters unless clearly the subject.\\n"
+        "5) If uncertain, use null."
     )
 
     user_payload = {
+        "mode": mode,
         "url": url,
         "pdf_count": pdf_count,
         "first_h1": first_h1,
+        "first_page_text": first_page_text[:6000],
         "source_meta": source_meta,
         "source_markdown": md_text,
     }
@@ -300,10 +317,8 @@ def main() -> int:
     parser.add_argument("--tmp-root", default="tmp/runs", help="Root directory for per-run artifacts")
     parser.add_argument("--md-file", default="", help="source.md path")
     parser.add_argument("--pdf-links-file", default="", help="pdf-links.txt path")
+    parser.add_argument("--first-page-file", default="", help="first-page.txt path (PDF mode)")
     args = parser.parse_args()
-
-    if args.mode == "pdf":
-        raise SystemExit("PDF mode is not implemented for Step 2 metadata extraction.")
 
     out_dir = Path(args.tmp_root) / args.run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -311,8 +326,12 @@ def main() -> int:
 
     md_path = args.md_file or str(out_dir / "source.md")
     pdf_links_path = args.pdf_links_file or str(out_dir / "pdf-links.txt")
+    first_page_path = args.first_page_file or str(out_dir / "first-page.txt")
 
     source_md = _read_text(md_path)
+    first_page_text = _read_text(first_page_path)
+    if args.mode == "pdf" and not source_md and first_page_text:
+        source_md = f"# PDF Source\n\n{first_page_text}\n"
     if not source_md:
         raise SystemExit(f"source markdown not found or empty: {md_path}")
 
@@ -330,11 +349,15 @@ def main() -> int:
                 k, v = line.split(":", 1)
                 source_meta[k.strip()] = v.strip().strip('"').strip("'")
 
-    llm_data = _call_llm(source_md, args.url, pdf_count, source_meta)
+    llm_data = _call_llm(source_md, args.url, pdf_count, source_meta, args.mode, first_page_text)
     heading_page_type = _heading_based_page_type(source_md)
     final_page_type = heading_page_type or llm_data.get("page_type", "UNKNOWN")
+    if args.mode == "pdf" and final_page_type == "UNKNOWN":
+        final_page_type = "REPORT"
 
     meeting_name = llm_data.get("meeting_name")
+    if args.mode == "pdf" and (not meeting_name):
+        meeting_name = _first_non_empty_line(first_page_text) or None
     date_yyyymmdd, date_source = _resolve_date_yyyymmdd(llm_data.get("date_iso"), source_md)
     round_number = llm_data.get("round_number")
     round_text = llm_data.get("round_text")
@@ -366,6 +389,7 @@ def main() -> int:
         "inputs": {
             "md_file": md_path,
             "pdf_links_file": pdf_links_path,
+            "first_page_file": first_page_path,
             "pdf_count": pdf_count,
             "source_meta": source_meta,
             "model": OPENAI_MODEL,

@@ -20,6 +20,12 @@ Detect whether the source is HTML or PDF and then follow the matching procedure 
 4. Execute only the selected procedure file.
 5. Merge findings into one final summary with explicit source mapping.
 
+## Recommended Runner
+
+For local execution through Step10 (HTML/PDF auto-detect), use:
+
+`bash scripts/run_pagereport.sh "<URL>"`
+
 ## Procedure Files
 
 1. `references/html-procedure.md`

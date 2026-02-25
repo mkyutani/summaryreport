@@ -5,8 +5,13 @@ Apply this procedure when the provided source URL resolves directly to a PDF fil
 ## Status
 
 Step 1 is implemented.
-Step 2 is intentionally not implemented for PDF flow.
-Step 2 onward are currently unimplemented and must be skipped.
+Step 2 is implemented.
+Step 4b is implemented (body digest).
+Step 5 is implemented.
+Step 6-8 integrated pipeline is implemented.
+Step 9 is implemented.
+Step 10 is implemented.
+Step 3 and Step 11 onward are currently unimplemented and must be skipped.
 
 ## Arguments
 
@@ -45,8 +50,14 @@ Step 8: bluesky-poster -> post to Bluesky
 
 Current handling:
 - Step 1: `IMPLEMENTED`
-- Step 2: `SKIPPED (not needed for PDF currently)`
-- Step 3 onward: `SKIPPED (unimplemented)`
+- Step 2: `IMPLEMENTED`
+- Step 3: `SKIPPED (unimplemented)`
+- Step 4b: `IMPLEMENTED (body digest)`
+- Step 5: `IMPLEMENTED`
+- Step 6-8: `IMPLEMENTED (integrated)`
+- Step 9: `IMPLEMENTED`
+- Step 10: `IMPLEMENTED`
+- Step 11 onward: `SKIPPED (unimplemented)`
 
 ## Step 1 Implementation
 
@@ -56,4 +67,41 @@ Current handling:
   - `python3 scripts/step1_pdf_downloader.py --url \"<PDF_URL>\" [--run-id \"<RUN_ID>\"]`
 - Output artifacts (default):
   - `tmp/runs/<run_id>/source.pdf`
+  - `tmp/runs/<run_id>/first-page.txt`
+  - `tmp/runs/<run_id>/source.md`
+  - `tmp/runs/<run_id>/pdf-links.txt` (empty)
+  - `tmp/runs/<run_id>/pdf-links.json` (empty list)
   - `tmp/runs/<run_id>/metadata.json`
+
+## Step 2 Implementation
+
+- Script: `scripts/step2_metadata_extractor.py`
+- Purpose:
+  - extract title/date/round/page_type with LLM.
+  - in `pdf` mode, prioritize `first-page.txt` for title extraction.
+- Command:
+  - `python3 scripts/step2_metadata_extractor.py --run-id "<RUN_ID>" --mode pdf --url "<PDF_URL>"`
+- Output:
+  - `tmp/runs/<run_id>/step2-metadata.json`
+
+## Step 4b Implementation (body digest)
+
+- Script: `scripts/step4_body_digest.py`
+- Purpose: extract body digest used by Step 9.
+- Command:
+  - `python3 scripts/step4_body_digest.py --run-id "<RUN_ID>"`
+- Output:
+  - `tmp/runs/<run_id>/body-digest.json`
+
+## Step 5-10 Implementation
+
+- Step 5: `scripts/step5_material_selector.py`
+- Step 6-8 (integrated): `scripts/step6_8_document_pipeline.py`
+- Step 9: `scripts/step9_summary_generator.py`
+- Step 10: `scripts/step10_file_writer.py`
+
+## End-to-end Command
+
+```bash
+bash skills/pagereport/scripts/run_pagereport.sh "<PDF_URL>"
+```

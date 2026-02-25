@@ -4,7 +4,7 @@ A repository for generating Japanese summary reports from government HTML/PDF pa
 
 ## Current Status
 
-`pagereport` skill is implemented through Step10.
+`pagereport` skill is implemented through Step10 for both HTML and PDF inputs.
 
 ## Repository Layout
 
@@ -25,6 +25,22 @@ A repository for generating Japanese summary reports from government HTML/PDF pa
 6. `step6_8_document_pipeline.py` (integrated Step6-8)
 7. `step9_summary_generator.py`
 8. `step10_file_writer.py`
+
+## Main Flow (PDF)
+
+1. `step1_pdf_downloader.py`
+2. `step2_metadata_extractor.py --mode pdf` (title from first-page text)
+3. `step4_body_digest.py`
+4. `step5_material_selector.py`
+5. `step6_8_document_pipeline.py` (integrated Step6-8)
+6. `step9_summary_generator.py`
+7. `step10_file_writer.py`
+
+## One-command Run (HTML/PDF auto-detect)
+
+```bash
+bash skills/pagereport/scripts/run_pagereport.sh "<URL>"
+```
 
 ## Quick Start
 

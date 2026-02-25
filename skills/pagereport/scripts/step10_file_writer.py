@@ -54,6 +54,8 @@ def _build_page_overview(step2: dict[str, Any], step9: dict[str, Any]) -> str:
     page_type = str(step2.get("page_type", "UNKNOWN"))
     meeting_name = str(step2.get("meeting_name", {}).get("value", ""))
     round_text = str(step2.get("round", {}).get("round_text", ""))
+    if round_text.lower() in {"none", "null"}:
+        round_text = ""
     date_ymd = str(step2.get("date", {}).get("value", ""))
     coverage = str(step9.get("coverage_note", "")).strip()
     url = str(step9.get("source_url", "")).strip() or str(step2.get("url", "")).strip()
@@ -75,16 +77,23 @@ def _build_page_overview(step2: dict[str, Any], step9: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
-def _build_material_details(step8: dict[str, Any]) -> str:
+def _build_material_details(step8: dict[str, Any], step2: dict[str, Any]) -> str:
     docs = step8.get("per_document", [])
     if not isinstance(docs, list) or not docs:
         return "（資料サマリーなし）"
+
+    mode = str(step2.get("mode", "")).lower()
+    preferred_title = str(step2.get("meeting_name", {}).get("value", "")).strip() or str(
+        step2.get("report_title", "")
+    ).strip()
 
     parts: list[str] = []
     for i, d in enumerate(docs, start=1):
         if not isinstance(d, dict):
             continue
         title = str(d.get("title", "")).strip() or f"資料{i}"
+        if mode == "pdf" and title.lower() in {"source.pdf", "source"} and preferred_title:
+            title = preferred_title
         url = str(d.get("url", "")).strip()
         doc_type = str(d.get("document_type", "")).strip()
         summary = str(d.get("summary", "")).strip()
@@ -117,7 +126,7 @@ def _build_report_md(step2: dict[str, Any], step9: dict[str, Any], step8: dict[s
     overall = str(step9.get("overall_summary_ja", "")).strip()
     url = str(step9.get("source_url", "")).strip() or str(step2.get("url", "")).strip()
     page_overview = _build_page_overview(step2, step9)
-    details = _build_material_details(step8)
+    details = _build_material_details(step8, step2)
 
     lines: list[str] = []
     lines.append(f"# {title}")

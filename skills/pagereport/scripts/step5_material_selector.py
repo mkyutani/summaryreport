@@ -54,6 +54,17 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _read_json_obj(path: Path) -> dict[str, Any]:
+    raw = _read_text(path)
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
 def _normalize_text(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip())
 
@@ -209,6 +220,25 @@ def _parse_links_txt(path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def _fallback_single_pdf_item(run_dir: Path) -> list[dict[str, str]]:
+    pdf_path = run_dir / "source.pdf"
+    if not pdf_path.exists():
+        return []
+    meta = _read_json_obj(run_dir / "metadata.json")
+    url = _normalize_text(str(meta.get("final_url", "") or meta.get("input_url", "")))
+    if not url:
+        url = f"file://{pdf_path}"
+    return [
+        {
+            "text": "source.pdf",
+            "url": url,
+            "filename": "source.pdf",
+            "estimated_category": "material",
+            "saved_path": str(pdf_path),
+        }
+    ]
+
+
 def _dedupe_by_url(items: list[dict[str, str]]) -> list[dict[str, str]]:
     merged: dict[str, dict[str, str]] = {}
     for it in items:
@@ -348,6 +378,26 @@ def _download_selected_pdfs(run_dir: Path, selected: list[dict[str, Any]]) -> li
     results: list[dict[str, Any]] = []
     for i, item in enumerate(selected, start=1):
         url = item.get("url", "")
+        existing_path = str(item.get("saved_path", "")).strip()
+        if existing_path:
+            p = Path(existing_path)
+            if not p.exists() and not p.is_absolute():
+                p = run_dir / p
+            if p.exists():
+                results.append(
+                    {
+                        "index": i,
+                        "url": url,
+                        "original_filename": item.get("filename", "") or p.name,
+                        "saved_path": str(p),
+                        "downloaded": True,
+                        "size_bytes": p.stat().st_size,
+                        "content_type": "application/pdf",
+                        "reused_existing_file": True,
+                    }
+                )
+                continue
+
         original_filename = item.get("filename", "") or Path(unquote(urlparse(url).path)).name or "source.pdf"
         title_part = _safe_filename_part(item.get("text", "")) or "pdf"
         ext = Path(original_filename).suffix or ".pdf"
@@ -501,6 +551,9 @@ def main() -> int:
     if not items:
         items = _parse_links_txt(links_txt_path)
         source = "pdf-links.txt"
+    if not items:
+        items = _fallback_single_pdf_item(out_dir)
+        source = "source.pdf"
 
     items = _dedupe_by_url(items)
     minutes_text = _read_text(minutes_path)
@@ -536,6 +589,7 @@ def main() -> int:
                 "text": it.get("text", ""),
                 "url": it.get("url", ""),
                 "filename": it.get("filename", ""),
+                "saved_path": it.get("saved_path", ""),
                 "document_category": category,
                 "material_id": material_id,
                 "score_components": {
