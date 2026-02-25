@@ -42,6 +42,15 @@ A repository for generating Japanese summary reports from government HTML/PDF pa
 bash skills/pagereport/scripts/run_pagereport.sh "<URL>"
 ```
 
+For HTML pages containing multiple meetings, you can scope one target meeting:
+
+```bash
+bash skills/pagereport/scripts/run_pagereport.sh "<URL>" \
+  --target-meeting-name "サイバーセキュリティ推進専門家会議" \
+  --target-round "4" \
+  --target-date "20260220"
+```
+
 ## Quick Start
 
 ```bash

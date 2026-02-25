@@ -7,6 +7,7 @@ Apply this procedure when the provided source URL resolves to an HTML page.
 Step 0 is implemented.
 Step 1 is implemented (Docling server required).
 Step 1 substeps (clean/title/pdf-links) are implemented as helper scripts.
+Step 1.5 is implemented (optional target meeting selector for multi-meeting pages).
 Step 2 is implemented for core metadata (meeting name, date, round).
 Step 4 is implemented (minutes source selection).
 Step 5 is implemented (material scoring and selection).
@@ -60,6 +61,7 @@ Current handling:
 - Step 0: `IMPLEMENTED`
 - Step 1: `IMPLEMENTED`
 - Step 1 substeps (clean/title/pdf-links): `IMPLEMENTED (helper scripts)`
+- Step 1.5: `IMPLEMENTED (optional target meeting selector)`
 - Step 2: `IMPLEMENTED (meeting name/date/round only)`
 - Step 3: `OPTIONAL (skip by default)`
 - Step 4: `IMPLEMENTED (html/pdf/none branching)`
@@ -141,6 +143,21 @@ Current handling:
 - Date post-validation:
   - Validate LLM date against date candidates extracted from `source.md`.
   - If LLM date is not in candidates, fallback to the first date candidate in `source.md`.
+
+## Step 1.5 Implementation (optional, HTML only)
+
+- Script: `scripts/step1_5_meeting_selector.py`
+- Purpose:
+  - when one HTML page includes multiple meetings, select one target scope and prepare scoped inputs.
+- Command:
+  - `python3 scripts/step1_5_meeting_selector.py --run-id "<RUN_ID>" --target-meeting-name "<会議名>" [--target-round "<回数>"] [--target-date "<yyyymmdd>"] [--target-text "<自由記述>"]`
+- Outputs:
+  - `tmp/runs/<run_id>/selected-source.md`
+  - `tmp/runs/<run_id>/selected-pdf-links.json`
+  - `tmp/runs/<run_id>/selected-pdf-links.txt`
+  - `tmp/runs/<run_id>/selection-metadata.json`
+- Downstream:
+  - when Step 1.5 is applied, Step2/Step4/Step5 should use selected files.
 
 ## Step 4 Specification (minutes-referencer)
 

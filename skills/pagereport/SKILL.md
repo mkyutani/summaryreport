@@ -26,6 +26,10 @@ For local execution through Step10 (HTML/PDF auto-detect), use:
 
 `bash scripts/run_pagereport.sh "<URL>"`
 
+For HTML pages that include multiple meetings and need one target only, pass target scope:
+
+`bash scripts/run_pagereport.sh "<URL>" --target-meeting-name "<会議名>" [--target-round "<回数>"] [--target-date "<yyyymmdd>"] [--target-text "<自由記述>"]`
+
 ## Procedure Files
 
 1. `references/html-procedure.md`

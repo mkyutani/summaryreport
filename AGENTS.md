@@ -23,6 +23,7 @@ Primary workflow is script execution from repository root.
 - `python3 skills/pagereport/scripts/step9_summary_generator.py --run-id "<RUN_ID>"`: integrated summary.
 - `python3 skills/pagereport/scripts/step10_file_writer.py --run-id "<RUN_ID>"`: final report writer.
 - `bash skills/pagereport/scripts/run_pagereport.sh "<URL>"`: auto-detect HTML/PDF and run through Step10.
+- `bash skills/pagereport/scripts/run_pagereport.sh "<URL>" --target-meeting-name "<会議名>" [--target-round "<回数>"] [--target-date "<yyyymmdd>"]`: HTML multi-meeting scope selection.
 
 ## Coding Style & Naming Conventions
 Python conventions used in this repository:
