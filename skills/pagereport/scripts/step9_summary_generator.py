@@ -296,6 +296,25 @@ def _contains_banned_meta_phrase(text: str) -> bool:
     return any(re.search(p, text) is not None for p in patterns)
 
 
+def _contains_operational_meeting_phrases(text: str) -> bool:
+    if not text:
+        return False
+    patterns = [
+        r"開会",
+        r"閉会",
+        r"開催日時",
+        r"開催場所",
+        r"会場",
+        r"会議室",
+        r"合同庁舎",
+        r"永田町",
+        r"挨拶",
+        r"日時",
+        r"場所",
+    ]
+    return any(re.search(p, text) is not None for p in patterns)
+
+
 def _missing_required_subject(abstract: str, meeting_name: str) -> bool:
     if not meeting_name.strip():
         return False
@@ -350,6 +369,8 @@ def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_
             "If meeting_name is provided, include that meeting name explicitly in the first sentence of abstract_ja. "
             "Write in past tense because the meeting has already been held. "
             "Describe only what is explicitly present on the page (agenda/theme/high-level context). "
+            "Do not include operational meeting logistics such as date/time, venue, opening/closing notes, greetings, or chair progression. "
+            "Focus on substantive agenda themes and policy focus only. "
             "Do not enumerate individual linked document titles. "
             "Do not describe discussion details, opinions, or decisions. "
             "Write in meeting style: start with the meeting name/round and agenda, "
@@ -504,11 +525,13 @@ def _review_and_regenerate(
     for _ in range(max_regen + 1):
         abstract = _normalize_summary_opening(str(current.get("abstract_ja", "")).strip())
         overall = str(current.get("overall_summary_ja", "")).strip()
+        page_type = str(user_payload.get("page_type", "")).upper().strip()
         review_payload = {
             "summary_context": {
                 "page_type": user_payload.get("page_type", ""),
                 "meeting_name": user_payload.get("meeting_name", ""),
                 "materials_count": len(user_payload.get("materials", []) or []),
+                "minutes_available": bool((user_payload.get("minutes") or {}).get("available", False)),
             },
             "abstract_ja": abstract,
             "overall_summary_ja": overall,
@@ -518,6 +541,7 @@ def _review_and_regenerate(
                 "資料名列挙やリンク案内に偏っていないこと",
                 "meeting_nameがある場合、abstract_jaの先頭文に会議名/報告書名が明示されていること",
                 "文頭が不自然でないこと（例: 『議事次第 本会合では』のような形を避ける）",
+                "MEETINGの要約本文では日時/場所/開会閉会/挨拶など運営情報を主内容にしないこと（議題・政策論点中心）",
             ],
         }
         review = _call_llm_review(review_payload)
@@ -533,6 +557,14 @@ def _review_and_regenerate(
                 "is_ok": False,
                 "needs_regeneration": True,
                 "feedback": "meeting_nameがあるのにabstract_ja先頭文で会議名/報告書名が明示されていない",
+            }
+        if page_type == "MEETING" and (
+            _contains_operational_meeting_phrases(abstract) or _contains_operational_meeting_phrases(overall)
+        ):
+            review = {
+                "is_ok": False,
+                "needs_regeneration": True,
+                "feedback": "MEETING要約本文に運営情報（日時/場所/開会閉会/挨拶）が含まれている",
             }
         history.append(review)
         feedback = str(review.get("feedback", "")).strip()
