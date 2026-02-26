@@ -33,7 +33,7 @@ def _walk_strings(value: Any) -> List[str]:
 def _extract_markdown(payload: Any) -> Optional[str]:
     if isinstance(payload, dict):
         # Direct key matches first.
-        for key in ("markdown", "md"):
+        for key in ("markdown", "md", "md_content", "text_content"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value
@@ -106,4 +106,3 @@ def convert_url_to_markdown(
         "markdown": markdown,
         "raw_response": payload,
     }
-
