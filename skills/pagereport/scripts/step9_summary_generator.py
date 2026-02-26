@@ -296,6 +296,20 @@ def _contains_banned_meta_phrase(text: str) -> bool:
     return any(re.search(p, text) is not None for p in patterns)
 
 
+def _missing_required_subject(abstract: str, meeting_name: str) -> bool:
+    if not meeting_name.strip():
+        return False
+    normalized_abstract = re.sub(r"\s+", "", abstract)
+    normalized_name = re.sub(r"\s+", "", meeting_name)
+    if normalized_name in normalized_abstract:
+        return False
+    if "（" in normalized_name:
+        base = normalized_name.split("（", 1)[0]
+        if base and base in normalized_abstract:
+            return False
+    return True
+
+
 def _dedupe_round_repetition(text: str) -> str:
     if not text:
         return text
@@ -333,6 +347,7 @@ def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_
         return (
             common
             + " This is a MEETING page with no usable minutes and no material summaries. "
+            "If meeting_name is provided, include that meeting name explicitly in the first sentence of abstract_ja. "
             "Write in past tense because the meeting has already been held. "
             "Describe only what is explicitly present on the page (agenda/theme/high-level context). "
             "Do not enumerate individual linked document titles. "
@@ -349,6 +364,7 @@ def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_
         return (
             common
             + " This is a REPORT page. Focus on report body content first, then materials. "
+            "If meeting_name is provided, include that report name explicitly in the first sentence of abstract_ja. "
             "Do not describe meeting discussions as if spoken proceedings existed. "
             "When the source presents numbered pillars/sections, preserve that structure in the summary. "
             "Inline numbered points like '(1)... (2)...' in prose are allowed."
@@ -357,12 +373,14 @@ def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_
         return (
             common
             + " This is a MEETING page with minutes available. "
+            "If meeting_name is provided, include that meeting name explicitly in the first sentence of abstract_ja. "
             "Write in past tense because the meeting has already been held. "
             "Integrate meeting context, materials, and minutes-derived discussion flow."
         )
     return (
         common
         + " This is a MEETING page but minutes are unavailable. "
+        "If meeting_name is provided, include that meeting name explicitly in the first sentence of abstract_ja. "
         "Write in past tense because the meeting has already been held. "
         "Summarize only available meeting/material content without mentioning missing minutes."
     )
@@ -498,6 +516,7 @@ def _review_and_regenerate(
                 "abstract_jaが要約（Abstract）として成立していること（ページ紹介文ではない）",
                 "対象・論点・検討範囲が簡潔に記述されていること",
                 "資料名列挙やリンク案内に偏っていないこと",
+                "meeting_nameがある場合、abstract_jaの先頭文に会議名/報告書名が明示されていること",
                 "文頭が不自然でないこと（例: 『議事次第 本会合では』のような形を避ける）",
             ],
         }
@@ -507,6 +526,13 @@ def _review_and_regenerate(
                 "is_ok": False,
                 "needs_regeneration": True,
                 "feedback": "禁止メタ表現（例: 議事次第：/議事次第 本会合では/ページには/以下の資料）が残っている",
+            }
+        meeting_name = str(user_payload.get("meeting_name", "")).strip()
+        if _missing_required_subject(abstract, meeting_name):
+            review = {
+                "is_ok": False,
+                "needs_regeneration": True,
+                "feedback": "meeting_nameがあるのにabstract_ja先頭文で会議名/報告書名が明示されていない",
             }
         history.append(review)
         feedback = str(review.get("feedback", "")).strip()
