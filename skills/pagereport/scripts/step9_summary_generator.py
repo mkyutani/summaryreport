@@ -273,6 +273,10 @@ def _cleanup_meta_phrasing(text: str) -> str:
     t = t.replace("掲載されている", "示されている")
     t = t.replace("主要議題とする。", "主要議題とした。")
     t = t.replace("主要議題とする", "主要議題とした")
+    t = t.replace("配布本会合では", "本会合では")
+    # Drop page-structure lead-ins like "...資料が配布され、" and keep substantive sentence.
+    t = re.sub(r"^(.{0,120}?)(?:では、|は、)?[^。]{0,220}?配布され、", r"\1では、", t)
+    t = re.sub(r"^(.{0,120}?)(?:では、|は、)?[^。]{0,220}?が掲載され、", r"\1では、", t)
     # Normalize awkward lead-in like "...議事次第 本会合では"
     t = re.sub(r"^(.{0,120}?)議事次第\s*本会合では", r"\1では", t)
     t = re.sub(r"^(.{0,120}?)議事次第\s*では", r"\1では", t)
@@ -292,6 +296,10 @@ def _contains_banned_meta_phrase(text: str) -> bool:
         r"ページ上では",
         r"会議案内には",
         r"以下の資料",
+        r"配布資料",
+        r"配布された",
+        r"掲載資料",
+        r"資料が掲載",
     ]
     return any(re.search(p, text) is not None for p in patterns)
 
@@ -360,7 +368,9 @@ def _build_system_prompt(page_type: str, minutes_available: bool, materials_non_
         "abstract_ja must be one prose paragraph (no bullets, no list numbering, no line breaks). "
         "Do not start abstract_ja with generic lead-ins like '本資料は'. "
         "overall_summary_ja may be longer but keep it concise and factual. "
-        "Do not include lack-of-data statements such as missing minutes/materials in abstract_ja or overall_summary_ja."
+        "Do not include lack-of-data statements such as missing minutes/materials in abstract_ja or overall_summary_ja. "
+        "Do not describe document-distribution facts (e.g., materials were distributed/listed/posted). "
+        "If document titles are referenced, do so only to explain substantive policy content, not page structure."
     )
     if page_type == "MEETING" and (not minutes_available) and materials_non_empty == 0:
         return (
@@ -539,6 +549,7 @@ def _review_and_regenerate(
                 "abstract_jaが要約（Abstract）として成立していること（ページ紹介文ではない）",
                 "対象・論点・検討範囲が簡潔に記述されていること",
                 "資料名列挙やリンク案内に偏っていないこと",
+                "『資料が配布/掲載された』等のページ構造説明に寄らず、実質的内容の要約であること",
                 "meeting_nameがある場合、abstract_jaの先頭文に会議名/報告書名が明示されていること",
                 "文頭が不自然でないこと（例: 『議事次第 本会合では』のような形を避ける）",
                 "MEETINGの要約本文では日時/場所/開会閉会/挨拶など運営情報を主内容にしないこと（議題・政策論点中心）",
