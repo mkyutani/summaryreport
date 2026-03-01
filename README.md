@@ -4,14 +4,14 @@ A repository for generating Japanese summary reports from government HTML/PDF pa
 
 ## Current Status
 
-`pagereport` skill is implemented through Step10 for both HTML and PDF inputs.
+`summaryreport` skill is implemented through Step10 for both HTML and PDF inputs.
 
 ## Repository Layout
 
 - `AGENTS.md`: repository and workflow guidelines.
-- `skills/pagereport/SKILL.md`: skill definition.
-- `skills/pagereport/references/`: procedure and output format docs.
-- `skills/pagereport/scripts/`: step scripts (`step0` to `step10`).
+- `skills/summaryreport/SKILL.md`: skill definition.
+- `skills/summaryreport/references/`: procedure and output format docs.
+- `skills/summaryreport/scripts/`: step scripts (`step0` to `step10`).
 - `tmp/runs/<run_id>/`: intermediate artifacts per run.
 - `output/`: generated final report files.
 
@@ -39,13 +39,13 @@ A repository for generating Japanese summary reports from government HTML/PDF pa
 ## One-command Run (HTML/PDF auto-detect)
 
 ```bash
-bash skills/pagereport/scripts/run_pagereport.sh "<URL>"
+bash skills/summaryreport/scripts/run_summaryreport.sh "<URL>"
 ```
 
 For HTML pages containing multiple meetings, you can scope one target meeting:
 
 ```bash
-bash skills/pagereport/scripts/run_pagereport.sh "<URL>" \
+bash skills/summaryreport/scripts/run_summaryreport.sh "<URL>" \
   --target-meeting-name "サイバーセキュリティ推進専門家会議" \
   --target-round "4" \
   --target-date "20260220"
@@ -55,31 +55,31 @@ bash skills/pagereport/scripts/run_pagereport.sh "<URL>" \
 
 ```bash
 # 1) optional: ensure docling server is running
-python3 skills/pagereport/scripts/step0_init_docling_server.py
+python3 skills/summaryreport/scripts/step0_init_docling_server.py
 
 # 2) acquire source
-python3 skills/pagereport/scripts/step1_html_content_acquirer.py \
+python3 skills/summaryreport/scripts/step1_html_content_acquirer.py \
   --url "https://example.go.jp/page.html" \
   --run-id "20260223T000000Z_example"
 
 # 3) metadata + minutes
-python3 skills/pagereport/scripts/step2_metadata_extractor.py \
+python3 skills/summaryreport/scripts/step2_metadata_extractor.py \
   --run-id "20260223T000000Z_example" \
   --mode html \
   --url "https://example.go.jp/page.html"
-python3 skills/pagereport/scripts/step4_minutes_referencer.py \
+python3 skills/summaryreport/scripts/step4_minutes_referencer.py \
   --run-id "20260223T000000Z_example"
 
 # 4) materials + integrated pipeline
-python3 skills/pagereport/scripts/step5_material_selector.py \
+python3 skills/summaryreport/scripts/step5_material_selector.py \
   --run-id "20260223T000000Z_example"
-python3 skills/pagereport/scripts/step6_8_document_pipeline.py \
+python3 skills/summaryreport/scripts/step6_8_document_pipeline.py \
   --run-id "20260223T000000Z_example"
 
 # 5) integrated summary + final file
-python3 skills/pagereport/scripts/step9_summary_generator.py \
+python3 skills/summaryreport/scripts/step9_summary_generator.py \
   --run-id "20260223T000000Z_example"
-python3 skills/pagereport/scripts/step10_file_writer.py \
+python3 skills/summaryreport/scripts/step10_file_writer.py \
   --run-id "20260223T000000Z_example"
 ```
 

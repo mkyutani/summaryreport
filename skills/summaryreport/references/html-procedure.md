@@ -131,7 +131,7 @@ Current handling:
   - `tmp/runs/<run_id>/step2-metadata.json`
 - LLM requirements:
   - `OPENAI_API_KEY` must be set.
-  - Model default is `gpt-5-mini` (override with `PAGEREPORT_STEP2_MODEL`).
+  - Model default is `gpt-5-mini` (override with `SUMMARYREPORT_STEP2_MODEL`).
 - Extracted fields:
   - `page_type`
   - `meeting_name`
@@ -321,7 +321,7 @@ Legacy standalone mode:
   - empty-content detection delegated to LLM output schema.
 - LLM requirements:
   - `OPENAI_API_KEY` must be set.
-  - model default: `gpt-5-mini` (override with `PAGEREPORT_STEP8_MODEL`).
+  - model default: `gpt-5-mini` (override with `SUMMARYREPORT_STEP8_MODEL`).
   - optional endpoint override: `OPENAI_API_BASE`.
 - Output:
   - `tmp/runs/<run_id>/step8-material-summaries.json`
@@ -357,7 +357,7 @@ Legacy standalone mode:
   - if `MEETING` and no minutes available, explicitly note that verbatim discussion details are unavailable.
 - LLM requirements:
   - `OPENAI_API_KEY` must be set.
-  - model default: `gpt-5-mini` (override with `PAGEREPORT_STEP9_MODEL`).
+  - model default: `gpt-5-mini` (override with `SUMMARYREPORT_STEP9_MODEL`).
 - Output:
   - `tmp/runs/<run_id>/step9-summary.json`
     - `abstract_ja`

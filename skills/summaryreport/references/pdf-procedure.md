@@ -103,5 +103,5 @@ Current handling:
 ## End-to-end Command
 
 ```bash
-bash skills/pagereport/scripts/run_pagereport.sh "<PDF_URL>"
+bash skills/summaryreport/scripts/run_summaryreport.sh "<PDF_URL>"
 ```

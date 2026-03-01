@@ -86,14 +86,14 @@ MODE="$(detect_mode "$URL")"
 echo "run_id=$RUN_ID mode=$MODE"
 
 if [ "$MODE" = "html" ]; then
-  python3 skills/pagereport/scripts/step0_init_docling_server.py
-  python3 skills/pagereport/scripts/step1_html_content_acquirer.py --url "$URL" --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step0_init_docling_server.py
+  python3 skills/summaryreport/scripts/step1_html_content_acquirer.py --url "$URL" --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
   SOURCE_MD_PATH="$TMP_ROOT/$RUN_ID/source.md"
   PDF_LINKS_JSON_PATH="$TMP_ROOT/$RUN_ID/pdf-links.json"
   PDF_LINKS_TXT_PATH="$TMP_ROOT/$RUN_ID/pdf-links.txt"
 
   if [ -n "$TARGET_MEETING_NAME" ] || [ -n "$TARGET_ROUND" ] || [ -n "$TARGET_DATE" ] || [ -n "$TARGET_TEXT" ]; then
-    python3 skills/pagereport/scripts/step1_5_meeting_selector.py \
+    python3 skills/summaryreport/scripts/step1_5_meeting_selector.py \
       --run-id "$RUN_ID" \
       --tmp-root "$TMP_ROOT" \
       --target-meeting-name "$TARGET_MEETING_NAME" \
@@ -105,21 +105,21 @@ if [ "$MODE" = "html" ]; then
     PDF_LINKS_TXT_PATH="$TMP_ROOT/$RUN_ID/selected-pdf-links.txt"
   fi
 
-  python3 skills/pagereport/scripts/step2_metadata_extractor.py --run-id "$RUN_ID" --mode html --url "$URL" --tmp-root "$TMP_ROOT" --md-file "$SOURCE_MD_PATH" --pdf-links-file "$PDF_LINKS_TXT_PATH"
-  python3 skills/pagereport/scripts/step4_minutes_referencer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --md-file "$SOURCE_MD_PATH" --pdf-links-file "$PDF_LINKS_TXT_PATH"
-  python3 skills/pagereport/scripts/step4_body_digest.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --source-md-file "$SOURCE_MD_PATH"
-  python3 skills/pagereport/scripts/step5_material_selector.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --pdf-links-file "$PDF_LINKS_TXT_PATH" --pdf-links-json-file "$PDF_LINKS_JSON_PATH"
-  python3 skills/pagereport/scripts/step6_8_document_pipeline.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
-  python3 skills/pagereport/scripts/step9_summary_generator.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
-  python3 skills/pagereport/scripts/step10_file_writer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step2_metadata_extractor.py --run-id "$RUN_ID" --mode html --url "$URL" --tmp-root "$TMP_ROOT" --md-file "$SOURCE_MD_PATH" --pdf-links-file "$PDF_LINKS_TXT_PATH"
+  python3 skills/summaryreport/scripts/step4_minutes_referencer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --md-file "$SOURCE_MD_PATH" --pdf-links-file "$PDF_LINKS_TXT_PATH"
+  python3 skills/summaryreport/scripts/step4_body_digest.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --source-md-file "$SOURCE_MD_PATH"
+  python3 skills/summaryreport/scripts/step5_material_selector.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --pdf-links-file "$PDF_LINKS_TXT_PATH" --pdf-links-json-file "$PDF_LINKS_JSON_PATH"
+  python3 skills/summaryreport/scripts/step6_8_document_pipeline.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step9_summary_generator.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step10_file_writer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
 else
-  python3 skills/pagereport/scripts/step1_pdf_downloader.py --url "$URL" --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
-  python3 skills/pagereport/scripts/step2_metadata_extractor.py --run-id "$RUN_ID" --mode pdf --url "$URL" --tmp-root "$TMP_ROOT"
-  python3 skills/pagereport/scripts/step4_body_digest.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
-  python3 skills/pagereport/scripts/step5_material_selector.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
-  python3 skills/pagereport/scripts/step6_8_document_pipeline.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
-  python3 skills/pagereport/scripts/step9_summary_generator.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
-  python3 skills/pagereport/scripts/step10_file_writer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step1_pdf_downloader.py --url "$URL" --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step2_metadata_extractor.py --run-id "$RUN_ID" --mode pdf --url "$URL" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step4_body_digest.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step5_material_selector.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step6_8_document_pipeline.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step9_summary_generator.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  python3 skills/summaryreport/scripts/step10_file_writer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
 fi
 
 echo "done run_id=$RUN_ID"

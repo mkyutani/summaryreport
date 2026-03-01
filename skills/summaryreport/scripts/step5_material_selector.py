@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlparse
 from fetch_with_retry import FetchError, fetch_url
 
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-OPENAI_MODEL = os.getenv("PAGEREPORT_STEP5_MODEL", "gpt-5-mini")
+OPENAI_MODEL = os.getenv("SUMMARYREPORT_STEP5_MODEL", "gpt-5-mini")
 
 BASE_SCORES = {
     "executive_summary": 5,
@@ -561,7 +561,7 @@ def main() -> int:
 
     has_exec_summary = any((x.get("estimated_category") or "") == "executive_summary" for x in items)
 
-    use_llm = os.getenv("PAGEREPORT_STEP5_LLM_CLASSIFY", "1") != "0"
+    use_llm = os.getenv("SUMMARYREPORT_STEP5_LLM_CLASSIFY", "1") != "0"
     llm_errors: list[str] = []
     scored: list[dict[str, Any]] = []
     for it in items:

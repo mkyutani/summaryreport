@@ -1,5 +1,5 @@
 ---
-name: pagereport
+name: summaryreport
 description: Summarize information from a provided URL that may be an HTML page or PDF, including relevant linked or attached files. Use when the user asks for a report or summary of a source page and its attachments, especially for meeting materials, public notices, policy documents, or multi-file report pages.
 ---
 
@@ -24,11 +24,11 @@ Detect whether the source is HTML or PDF and then follow the matching procedure 
 
 For local execution through Step10 (HTML/PDF auto-detect), use:
 
-`bash scripts/run_pagereport.sh "<URL>"`
+`bash scripts/run_summaryreport.sh "<URL>"`
 
 For HTML pages that include multiple meetings and need one target only, pass target scope:
 
-`bash scripts/run_pagereport.sh "<URL>" --target-meeting-name "<会議名>" [--target-round "<回数>"] [--target-date "<yyyymmdd>"] [--target-text "<自由記述>"]`
+`bash scripts/run_summaryreport.sh "<URL>" --target-meeting-name "<会議名>" [--target-round "<回数>"] [--target-date "<yyyymmdd>"] [--target-text "<自由記述>"]`
 
 ## Procedure Files
 

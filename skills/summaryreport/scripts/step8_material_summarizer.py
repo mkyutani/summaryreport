@@ -13,7 +13,7 @@ from typing import Any, Optional
 from urllib import error, request
 
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-OPENAI_MODEL = os.getenv("PAGEREPORT_STEP8_MODEL", "gpt-5-mini")
+OPENAI_MODEL = os.getenv("SUMMARYREPORT_STEP8_MODEL", "gpt-5-mini")
 
 HIGH_PRIORITY_KWS = ["概要", "要旨", "サマリー", "エグゼクティブ", "まとめ", "結論", "今後の方針", "重点", "ポイント"]
 MEDIUM_PRIORITY_KWS = ["背景", "目的", "経緯", "課題", "現状"]
