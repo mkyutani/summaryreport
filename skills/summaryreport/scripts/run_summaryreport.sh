@@ -83,6 +83,63 @@ PY
 
 MODE="$(detect_mode "$URL")"
 
+write_empty_step8() {
+  local run_id="$1"
+  local tmp_root="$2"
+  python3 - "$run_id" "$tmp_root" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+run_id = sys.argv[1]
+tmp_root = sys.argv[2]
+run_dir = Path(tmp_root) / run_id
+run_dir.mkdir(parents=True, exist_ok=True)
+
+payload = {
+    "run_id": run_id,
+    "inputs": {"mode": "skipped_no_selected_materials"},
+    "per_document": [],
+}
+(run_dir / "step8-material-summaries.json").write_text(
+    json.dumps(payload, ensure_ascii=False, indent=2),
+    encoding="utf-8",
+)
+PY
+}
+
+run_step6_8_or_skip() {
+  local run_id="$1"
+  local tmp_root="$2"
+  local step5_path="$tmp_root/$run_id/step5-material-selection.json"
+
+  local selected_count
+  selected_count="$(python3 - "$step5_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+except Exception:
+    print("-1")
+    raise SystemExit(0)
+
+selected = data.get("selected_pdfs", [])
+print(len(selected) if isinstance(selected, list) else "-1")
+PY
+)"
+
+  if [ "$selected_count" = "0" ]; then
+    echo "skip-step6-8: selected_pdfs=0"
+    write_empty_step8 "$run_id" "$tmp_root"
+    return
+  fi
+
+  python3 skills/summaryreport/scripts/step6_8_document_pipeline.py --run-id "$run_id" --tmp-root "$tmp_root"
+}
+
 echo "run_id=$RUN_ID mode=$MODE"
 
 if [ "$MODE" = "html" ]; then
@@ -109,7 +166,7 @@ if [ "$MODE" = "html" ]; then
   python3 skills/summaryreport/scripts/step4_minutes_referencer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --md-file "$SOURCE_MD_PATH" --pdf-links-file "$PDF_LINKS_TXT_PATH"
   python3 skills/summaryreport/scripts/step4_body_digest.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --source-md-file "$SOURCE_MD_PATH"
   python3 skills/summaryreport/scripts/step5_material_selector.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --pdf-links-file "$PDF_LINKS_TXT_PATH" --pdf-links-json-file "$PDF_LINKS_JSON_PATH"
-  python3 skills/summaryreport/scripts/step6_8_document_pipeline.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  run_step6_8_or_skip "$RUN_ID" "$TMP_ROOT"
   python3 skills/summaryreport/scripts/step9_summary_generator.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
   python3 skills/summaryreport/scripts/step10_file_writer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
 else
@@ -117,7 +174,7 @@ else
   python3 skills/summaryreport/scripts/step2_metadata_extractor.py --run-id "$RUN_ID" --mode pdf --url "$URL" --tmp-root "$TMP_ROOT"
   python3 skills/summaryreport/scripts/step4_body_digest.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
   python3 skills/summaryreport/scripts/step5_material_selector.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
-  python3 skills/summaryreport/scripts/step6_8_document_pipeline.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  run_step6_8_or_skip "$RUN_ID" "$TMP_ROOT"
   python3 skills/summaryreport/scripts/step9_summary_generator.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
   python3 skills/summaryreport/scripts/step10_file_writer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
 fi
