@@ -45,6 +45,14 @@ def _extract_heading_texts(md_text: str) -> list[str]:
     return headings
 
 
+def _first_meaningful_heading(md_text: str) -> str:
+    for heading in _extract_heading_texts(md_text):
+        normalized = _normalize(heading)
+        if normalized:
+            return normalized
+    return ""
+
+
 def _first_non_empty_line(text: str) -> str:
     for line in text.splitlines():
         s = _normalize(line)
@@ -103,6 +111,16 @@ def _safe_title_part(text: str) -> str:
     return cleaned.strip("._")
 
 
+def _clean_source_title(text: str) -> str:
+    cleaned = _normalize(text)
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"\s*-\s*国土交通省$", "", cleaned)
+    cleaned = re.sub(r"^審議会・委員会等[:：]\s*", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip(" -")
+
+
 def _build_report_title(
     meeting_name: Optional[str],
     date_yyyymmdd: Optional[str],
@@ -111,11 +129,11 @@ def _build_report_title(
 ) -> str:
     # Naming policy: <title_or_page>_<yyyymmdd>
     # Do not append round_text to avoid duplication.
-    title_or_page = _normalize(meeting_name or "")
+    title_or_page = _clean_source_title(meeting_name or "")
     if not title_or_page:
-        title_or_page = _normalize(source_meta.get("source_og_title", ""))
+        title_or_page = _clean_source_title(source_meta.get("source_og_title", ""))
     if not title_or_page:
-        title_or_page = _normalize(source_meta.get("source_title", ""))
+        title_or_page = _clean_source_title(source_meta.get("source_title", ""))
     if not title_or_page:
         host = urlparse(url).hostname or "report"
         title_or_page = host.replace(".", "-")
@@ -356,6 +374,8 @@ def main() -> int:
         final_page_type = "REPORT"
 
     meeting_name = llm_data.get("meeting_name")
+    if not meeting_name and args.mode == "html":
+        meeting_name = _first_meaningful_heading(source_md) or None
     if args.mode == "pdf" and (not meeting_name):
         meeting_name = _first_non_empty_line(first_page_text) or None
     date_yyyymmdd, date_source = _resolve_date_yyyymmdd(llm_data.get("date_iso"), source_md)

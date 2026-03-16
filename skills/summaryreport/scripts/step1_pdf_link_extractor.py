@@ -17,9 +17,9 @@ from bs4 import BeautifulSoup
 CATEGORY_RULES = [
     ("agenda", ["議事次第", "次第", "agenda"]),
     ("minutes", ["議事録", "議事要旨", "minutes"]),
+    ("participants", ["名簿", "出席者一覧", "participants"]),
     ("material", ["資料", "material"]),
     ("reference", ["参考資料", "参考", "reference"]),
-    ("participants", ["委員名簿", "出席者名簿", "participants"]),
 ]
 
 

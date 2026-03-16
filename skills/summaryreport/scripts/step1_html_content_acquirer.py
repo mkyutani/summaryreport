@@ -276,7 +276,7 @@ def classify_document_category(title: str, filename: str) -> str:
         return "agenda"
     if any(kw in title_norm for kw in ["議事録", "議事要旨", "会議録", "議事概要"]):
         return "minutes"
-    if any(kw in title_norm for kw in ["委員名簿", "出席者名簿"]):
+    if any(kw in title_norm for kw in ["名簿", "出席者一覧"]):
         return "participants"
     if any(kw in title_norm for kw in ["座席表", "座席配置"]):
         return "seating"

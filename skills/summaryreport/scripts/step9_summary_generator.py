@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib import error, request
@@ -686,6 +687,8 @@ def main() -> int:
 
     payload = {
         "run_id": args.run_id,
+        "status": "completed",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
         "inputs": {
             "step2_file": str(step2_path),
             "minutes_source_file": str(minutes_source_path),

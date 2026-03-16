@@ -30,6 +30,17 @@ For HTML pages that include multiple meetings and need one target only, pass tar
 
 `bash scripts/run_summaryreport.sh "<URL>" --target-meeting-name "<会議名>" [--target-round "<回数>"] [--target-date "<yyyymmdd>"] [--target-text "<自由記述>"]`
 
+## Execution Control
+
+1. Treat `run_summaryreport.sh` as the single source of truth for one report run. Do not start `step9` or `step10` separately while the parent runner is still in progress.
+2. Immediately record both the emitted `run_id` and the parent process `PID` when starting a run. `summaryreport` may run multiple jobs concurrently, so all monitoring and recovery must be tied to that specific `run_id` or remembered `PID`.
+3. Determine "still running" from the tracked `run_id`/`PID`, not only from whether output files already exist. Missing `step9-summary.json` or markdown output does not by itself mean the run is stuck.
+4. Check status in this order: parent `PID` or tracked run liveness, then parent runner exit status, then artifacts under `tmp/runs/<run_id>/` and `output/`.
+5. Do not generalize a failure from a separately invoked step to the original parent run. For example, a DNS or API failure seen in a manual `step9` retry is not proof that the parent `run_summaryreport.sh` failed for the same reason.
+6. Only state a root cause when it was observed in the parent run tied to the tracked `run_id`/`PID`. Otherwise, label it as a hypothesis or a failure seen in a separate recovery attempt.
+7. Only switch to per-step recovery after confirming that the parent run exited non-zero, or that the tracked `PID` is gone and the expected final artifacts for that same `run_id` were not produced.
+8. Before declaring a run abnormal, allow for normal wait time and distinguish clearly between "not finished yet" and "failed".
+
 ## Procedure Files
 
 1. `references/html-procedure.md`
