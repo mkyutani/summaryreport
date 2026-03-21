@@ -209,6 +209,18 @@ Current handling:
 - Output:
   - `tmp/runs/<run_id>/minutes-source.json`
 
+## Prime Minister Remarks Shortcut (HTML only)
+
+- Use when the user's request is specifically to summarize the prime minister's remarks from the HTML body.
+- Skip Step 4 (minutes), Step 5, Step 6, Step 7, and Step 8 for linked materials.
+- Instead run:
+  - `python3 scripts/step4_prime_minister_remarks.py --run-id "<RUN_ID>"`
+- Outputs:
+  - `tmp/runs/<run_id>/prime-minister-remarks.json`
+  - `tmp/runs/<run_id>/body-digest.json`
+  - `tmp/runs/<run_id>/step8-material-summaries.json`
+- Then proceed directly to Step 9 and Step 10.
+
 ## Step 5 Implementation
 
 - Script: `scripts/step5_material_selector.py`
@@ -355,6 +367,10 @@ Legacy standalone mode:
     - `abstract_ja` (<= 1500 chars, retry once if too long)
     - `overall_summary_ja`
   - if `MEETING` and no minutes available, explicitly note that verbatim discussion details are unavailable.
+  - Step9 may take a long time because it performs integrated generation and quality review; when invoked from the parent runner, wait for completion and do not assume failure just because output is delayed.
+- Operational note:
+  - if Step9 has started, keep waiting for the parent run to finish.
+  - if elapsed-time judgment is unavoidable, allow up to 30 minutes before treating Step9 as abnormal.
 - LLM requirements:
   - `OPENAI_API_KEY` must be set.
   - model default: `gpt-5-mini` (override with `SUMMARYREPORT_STEP9_MODEL`).
@@ -364,6 +380,15 @@ Legacy standalone mode:
     - `overall_summary_ja`
     - `minutes_used`, `minutes_note`
     - `materials_coverage`
+
+## Long-Running Step Note
+
+- `scripts/step6_8_document_pipeline.py` may also run for a long time.
+- The main source is Step8, which performs one LLM summary request per converted document, in parallel up to `--max-workers` (`4` by default in the integrated runner).
+- Each Step8 request allows up to 180 seconds, so runs with many PDFs can take substantial time even when healthy.
+- Operational rule:
+  - if Step6-8 or Step9 has started under the parent runner, keep waiting for the parent run to finish.
+  - if elapsed-time judgment is unavoidable, allow up to 30 minutes for Step6-8 and separately up to 30 minutes for Step9 before treating the run as abnormal.
 
 ## Step 10 Implementation
 

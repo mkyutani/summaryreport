@@ -99,6 +99,10 @@ Current handling:
 - Step 6-8 (integrated): `scripts/step6_8_document_pipeline.py`
 - Step 9: `scripts/step9_summary_generator.py`
 - Step 10: `scripts/step10_file_writer.py`
+- Operational note:
+  - Step6-8 can run for a long time, especially Step8 because it performs one LLM summary request per converted document.
+  - Step9 can also run for a long time; wait for the parent `run_summaryreport.sh` process to finish.
+  - If elapsed-time judgment is necessary, allow up to 30 minutes after Step6-8 starts, and separately up to 30 minutes after Step9 starts, before treating the run as abnormal.
 
 ## End-to-end Command
 

@@ -16,6 +16,32 @@ OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 OPENAI_MODEL = os.getenv("SUMMARYREPORT_STEP9_MODEL", "gpt-5-mini")
 
 
+def _sanitize_for_api_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _sanitize_for_api_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_api_json(v) for v in value]
+    if isinstance(value, tuple):
+        return [_sanitize_for_api_json(v) for v in value]
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8")
+    return value
+
+
+def _api_json_bytes(payload: dict[str, Any]) -> bytes:
+    sanitized = _sanitize_for_api_json(payload)
+    return json.dumps(
+        sanitized,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def _read_text(path: Path) -> str:
     if not path.exists():
         return ""
@@ -52,6 +78,12 @@ def _trim_chars(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars]
+
+
+def _string_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _step9_schema() -> dict[str, Any]:
@@ -112,7 +144,7 @@ def _call_llm(system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any
 
     req = request.Request(
         f"{OPENAI_API_BASE}/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
+        data=_api_json_bytes(body),
         method="POST",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
     )
@@ -155,7 +187,7 @@ def _call_llm_polish(polish_payload: dict[str, Any]) -> dict[str, Any]:
 
     req = request.Request(
         f"{OPENAI_API_BASE}/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
+        data=_api_json_bytes(body),
         method="POST",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
     )
@@ -201,7 +233,7 @@ def _call_llm_review(review_payload: dict[str, Any]) -> dict[str, Any]:
 
     req = request.Request(
         f"{OPENAI_API_BASE}/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
+        data=_api_json_bytes(body),
         method="POST",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
     )
@@ -505,6 +537,97 @@ def _extract_page_type(step2: dict[str, Any]) -> str:
     return "UNKNOWN"
 
 
+def _is_prime_minister_remarks_mode(step8: dict[str, Any], body_digest: dict[str, Any]) -> bool:
+    docs = step8.get("per_document", [])
+    if isinstance(docs, list):
+        for doc in docs:
+            if isinstance(doc, dict) and _string_value(doc.get("document_type")) == "prime_minister_remarks":
+                return True
+    return _string_value(body_digest.get("focus_mode")) == "prime_minister_remarks"
+
+
+def _sentence_split(text: str) -> list[str]:
+    if not text:
+        return []
+    parts = re.split(r"(?<=。)", re.sub(r"\s+", " ", text).strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _compact_sentence(text: str) -> str:
+    s = re.sub(r"\s+", " ", text).strip()
+    s = s.replace("本日は、", "")
+    s = s.replace("また、", "")
+    s = s.replace("そして、", "")
+    s = s.replace("具体的には、", "")
+    s = s.replace("このため、", "")
+    s = s.replace("特に、", "")
+    return s
+
+
+def _build_prime_minister_abstract(subject: str, points: list[str], sentences: list[str]) -> str:
+    summary_points = points[:6] if points else sentences[:6]
+    summary_points = [_compact_sentence(p) for p in summary_points if _compact_sentence(p)]
+    if not summary_points:
+        lead = f"{subject}での総理発言では、" if subject else "総理発言では、"
+        return lead + "会議での議論を踏まえた今後の対応方針が示された。"
+
+    lead = f"{subject}での総理発言では、" if subject else "総理発言では、"
+    body = " ".join(summary_points)
+    body = re.sub(r"。+", "。", body)
+    body = re.sub(r"\s+", "", body)
+    abstract = lead + body
+    if len(abstract) < 260 and len(sentences) > len(summary_points):
+        extra = "".join(_compact_sentence(s) for s in sentences[len(summary_points) : len(summary_points) + 2])
+        abstract += extra
+    return _trim_chars(abstract, 900)
+
+
+def _build_prime_minister_overall_summary(subject: str, points: list[str], sentences: list[str]) -> str:
+    summary_points = points[:8] if points else sentences[:8]
+    summary_points = [_compact_sentence(p) for p in summary_points if _compact_sentence(p)]
+    if not summary_points:
+        summary_points = [_compact_sentence(s) for s in sentences[:6] if _compact_sentence(s)]
+
+    intro = f"{subject}での総理発言の要旨。" if subject else "総理発言の要旨。"
+    paragraphs: list[str] = [intro]
+    if summary_points:
+        paragraphs.append(" ".join(summary_points[:3]))
+    if len(summary_points) > 3:
+        paragraphs.append(" ".join(summary_points[3:6]))
+    if len(summary_points) > 6:
+        paragraphs.append(" ".join(summary_points[6:8]))
+    return "\n\n".join(p for p in paragraphs if p).strip()
+
+
+def _fallback_prime_minister_summary(
+    step2: dict[str, Any],
+    step8: dict[str, Any],
+    body_digest: dict[str, Any],
+) -> dict[str, Any]:
+    meeting_name = _string_value(step2.get("meeting_name", {}).get("value", ""))
+    round_text = _string_value(step2.get("round", {}).get("round_text", ""))
+    docs = step8.get("per_document", [])
+    doc = docs[0] if isinstance(docs, list) and docs and isinstance(docs[0], dict) else {}
+    remarks_text = _string_value(doc.get("summary")) or _string_value(body_digest.get("digest_ja"))
+    points = doc.get("key_points", []) if isinstance(doc.get("key_points"), list) else []
+    points = [str(p).strip() for p in points if str(p).strip()]
+    sentences = _sentence_split(remarks_text)
+
+    subject = meeting_name
+    if round_text and round_text.lower() not in {"none", "null"} and round_text not in subject:
+        subject = f"{meeting_name}（{round_text}）" if meeting_name else round_text
+
+    abstract = _build_prime_minister_abstract(subject, points, sentences)
+    overall = _build_prime_minister_overall_summary(subject, points, sentences)
+
+    return {
+        "abstract_ja": _trim_chars(abstract, 1500),
+        "overall_summary_ja": overall,
+        "minutes_note": None,
+        "coverage_note": "HTML本文中の総理発言のみを要約。",
+    }
+
+
 def _generate_with_retry(system_prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
     first = _call_llm(system_prompt, payload)
     abstract = _normalize_summary_opening(str(first.get("abstract_ja", "")).strip())
@@ -667,10 +790,14 @@ def main() -> int:
     if isinstance(materials, list):
         materials_non_empty = len([d for d in materials if isinstance(d, dict) and not d.get("empty_content", False)])
 
-    system_prompt = _build_system_prompt(page_type, minutes_available, materials_non_empty)
-    user_payload = _build_user_payload(step2, step4_source, step4_extract, minutes_md, step8, pdf_links, body_digest)
-    generated = _generate_with_retry(system_prompt, user_payload)
-    generated, review_history = _review_and_regenerate(system_prompt, user_payload, generated, max_regen=1)
+    review_history: list[dict[str, Any]] = []
+    if _is_prime_minister_remarks_mode(step8, body_digest):
+        generated = _fallback_prime_minister_summary(step2, step8, body_digest)
+    else:
+        system_prompt = _build_system_prompt(page_type, minutes_available, materials_non_empty)
+        user_payload = _build_user_payload(step2, step4_source, step4_extract, minutes_md, step8, pdf_links, body_digest)
+        generated = _generate_with_retry(system_prompt, user_payload)
+        generated, review_history = _review_and_regenerate(system_prompt, user_payload, generated, max_regen=1)
 
     abstract = _normalize_summary_opening(str(generated.get("abstract_ja", "")).strip())
     overall = str(generated.get("overall_summary_ja", "")).strip()

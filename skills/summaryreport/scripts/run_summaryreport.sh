@@ -2,20 +2,26 @@
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
-  echo "Usage: $0 <URL> [--target-meeting-name <name>] [--target-round <round>] [--target-date <yyyymmdd>] [--target-text <text>]" >&2
+  echo "Usage: $0 <URL> [--run-id <run_id>] [--target-meeting-name <name>] [--target-round <round>] [--target-date <yyyymmdd>] [--target-text <text>] [--summary-focus <focus>]" >&2
   exit 1
 fi
 
 URL="$1"
 shift
 
+RUN_ID=""
 TARGET_MEETING_NAME=""
 TARGET_ROUND=""
 TARGET_DATE=""
 TARGET_TEXT=""
+SUMMARY_FOCUS=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --run-id)
+      RUN_ID="${2:-}"
+      shift 2
+      ;;
     --target-meeting-name)
       TARGET_MEETING_NAME="${2:-}"
       shift 2
@@ -32,6 +38,10 @@ while [ "$#" -gt 0 ]; do
       TARGET_TEXT="${2:-}"
       shift 2
       ;;
+    --summary-focus)
+      SUMMARY_FOCUS="${2:-}"
+      shift 2
+      ;;
     *)
       echo "Unknown argument: $1" >&2
       exit 2
@@ -40,12 +50,14 @@ while [ "$#" -gt 0 ]; do
 done
 TMP_ROOT="${TMP_ROOT:-tmp/runs}"
 
-RUN_ID="$(python3 - <<'PY'
+if [ -z "$RUN_ID" ]; then
+  RUN_ID="$(python3 - <<'PY'
 from datetime import datetime, timezone
 from uuid import uuid4
 print(datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:6])
 PY
 )"
+fi
 
 detect_mode() {
   local url="$1"
@@ -58,20 +70,42 @@ import sys
 from urllib import request, error
 
 url = sys.argv[1]
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+def build_headers(use_browser_headers: bool) -> dict[str, str]:
+    headers = {
+        "Accept": "*/*",
+    }
+    if use_browser_headers:
+        headers.update(
+            {
+                "User-Agent": BROWSER_USER_AGENT,
+                "Accept": "text/html,application/pdf,application/octet-stream,*/*",
+                "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+            }
+        )
+    return headers
 
 def detect(u: str) -> str:
-    # Try HEAD first, then GET headers.
-    for method in ("HEAD", "GET"):
-        try:
-            req = request.Request(u, method=method)
-            with request.urlopen(req, timeout=20) as resp:
-                ctype = (resp.headers.get("Content-Type") or "").lower()
-                if "application/pdf" in ctype:
-                    return "pdf"
-                if "text/html" in ctype:
-                    return "html"
-        except Exception:
-            continue
+    # Try HEAD first, then GET headers, and retry with browser-like headers.
+    for use_browser_headers in (False, True):
+        for method in ("HEAD", "GET"):
+            try:
+                req = request.Request(u, method=method, headers=build_headers(use_browser_headers))
+                with request.urlopen(req, timeout=20) as resp:
+                    ctype = (resp.headers.get("Content-Type") or "").lower()
+                    if "application/pdf" in ctype:
+                        return "pdf"
+                    if "text/html" in ctype:
+                        return "html"
+            except Exception:
+                continue
     # conservative fallback
     if u.lower().endswith(".pdf"):
         return "pdf"
@@ -163,11 +197,16 @@ if [ "$MODE" = "html" ]; then
   fi
 
   python3 skills/summaryreport/scripts/step2_metadata_extractor.py --run-id "$RUN_ID" --mode html --url "$URL" --tmp-root "$TMP_ROOT" --md-file "$SOURCE_MD_PATH" --pdf-links-file "$PDF_LINKS_TXT_PATH"
-  python3 skills/summaryreport/scripts/step4_minutes_referencer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --md-file "$SOURCE_MD_PATH" --pdf-links-file "$PDF_LINKS_TXT_PATH"
-  python3 skills/summaryreport/scripts/step4_body_digest.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --source-md-file "$SOURCE_MD_PATH"
-  python3 skills/summaryreport/scripts/step5_material_selector.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --pdf-links-file "$PDF_LINKS_TXT_PATH" --pdf-links-json-file "$PDF_LINKS_JSON_PATH"
-  run_step6_8_or_skip "$RUN_ID" "$TMP_ROOT"
-  python3 skills/summaryreport/scripts/step9_summary_generator.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  if [ "$SUMMARY_FOCUS" = "prime-minister-remarks" ]; then
+    python3 skills/summaryreport/scripts/step4_prime_minister_remarks.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --source-md-file "$SOURCE_MD_PATH"
+    python3 skills/summaryreport/scripts/step9_summary_generator.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --pdf-links-file "$TMP_ROOT/$RUN_ID/prime-minister-remarks-pdf-links.json"
+  else
+    python3 skills/summaryreport/scripts/step4_minutes_referencer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --md-file "$SOURCE_MD_PATH" --pdf-links-file "$PDF_LINKS_TXT_PATH"
+    python3 skills/summaryreport/scripts/step4_body_digest.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --source-md-file "$SOURCE_MD_PATH"
+    python3 skills/summaryreport/scripts/step5_material_selector.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT" --pdf-links-file "$PDF_LINKS_TXT_PATH" --pdf-links-json-file "$PDF_LINKS_JSON_PATH"
+    run_step6_8_or_skip "$RUN_ID" "$TMP_ROOT"
+    python3 skills/summaryreport/scripts/step9_summary_generator.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
+  fi
   python3 skills/summaryreport/scripts/step10_file_writer.py --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"
 else
   python3 skills/summaryreport/scripts/step1_pdf_downloader.py --url "$URL" --run-id "$RUN_ID" --tmp-root "$TMP_ROOT"

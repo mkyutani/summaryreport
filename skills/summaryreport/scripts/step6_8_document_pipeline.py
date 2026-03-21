@@ -88,7 +88,21 @@ def _process_one(run_dir: Path, item: dict[str, Any], idx: int) -> dict[str, Any
     conv_item["saved_path"] = analysis.get("saved_path", conv_item.get("saved_path", ""))
     converted = s7._convert_one(run_dir, conv_item, idx)
 
-    summary = s8._summarize_one(converted)
+    if converted.get("converted") and converted.get("output_path"):
+        summary = s8._summarize_one(converted)
+    else:
+        summary = {
+            "url": converted.get("url", ""),
+            "title": converted.get("title", ""),
+            "document_type": converted.get("document_type", ""),
+            "read_strategy": "unreadable",
+            "used_sections": [],
+            "summary": "",
+            "key_points": [],
+            "empty_content": True,
+            "empty_reason": "conversion_error",
+            "error": converted.get("error", "conversion failed"),
+        }
     return {"analysis": analysis, "converted": converted, "summary": summary}
 
 
@@ -178,4 +192,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

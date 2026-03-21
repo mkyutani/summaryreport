@@ -51,12 +51,49 @@ def _safe_filename_part(text: str) -> str:
     return s or "report"
 
 
-def _derive_output_path(step2: dict[str, Any]) -> Path:
+def _contains_prime_minister_remarks(step8: dict[str, Any]) -> bool:
+    docs = step8.get("per_document", [])
+    if not isinstance(docs, list):
+        return False
+    for doc in docs:
+        if isinstance(doc, dict) and _string_value(doc.get("document_type", "")) == "prime_minister_remarks":
+            return True
+    return False
+
+
+def _focused_report_title(step2: dict[str, Any], step8: dict[str, Any]) -> str:
+    report_title = _string_value(step2.get("report_title", ""))
+    if not _contains_prime_minister_remarks(step8):
+        return report_title or "report"
+
+    if report_title:
+        if "総理発言" in report_title:
+            return report_title
+        m = re.match(r"^(.*?)(?:_(\d{8}))?$", report_title)
+        if m:
+            base = _string_value(m.group(1))
+            date = _string_value(m.group(2))
+            if base and date:
+                return f"{base}_総理発言_{date}"
+            if base:
+                return f"{base}_総理発言"
+        return f"{report_title}_総理発言"
+
+    meeting = _string_value(step2.get("meeting_name", {}).get("value", ""))
+    date = _string_value(step2.get("date", {}).get("value", ""))
+    if meeting and date:
+        return f"{meeting}_総理発言_{date}"
+    if meeting:
+        return f"{meeting}_総理発言"
+    return f"総理発言_{date}" if date else "総理発言"
+
+
+def _derive_output_path(step2: dict[str, Any], step8: dict[str, Any]) -> Path:
     out = _string_value(step2.get("output_report_path", ""))
-    if out:
+    if out and not _contains_prime_minister_remarks(step8):
         return Path(out)
 
-    report_title = _string_value(step2.get("report_title", ""))
+    report_title = _focused_report_title(step2, step8)
     if not report_title:
         meeting = _string_value(step2.get("meeting_name", {}).get("value", ""))
         date = _string_value(step2.get("date", {}).get("value", ""))
@@ -136,12 +173,13 @@ def _build_material_details(step8: dict[str, Any], step2: dict[str, Any]) -> str
 
 
 def _build_report_md(step2: dict[str, Any], step9: dict[str, Any], step8: dict[str, Any]) -> str:
-    title = _string_value(step2.get("report_title", "")) or "report"
+    title = _focused_report_title(step2, step8)
     abstract = _string_value(step9.get("abstract_ja", ""))
     overall = _string_value(step9.get("overall_summary_ja", ""))
     url = _string_value(step9.get("source_url", "")) or _string_value(step2.get("url", ""))
     page_overview = _build_page_overview(step2, step9)
     details = _build_material_details(step8, step2)
+    detail_heading = "### 総理発言サマリー" if _contains_prime_minister_remarks(step8) else "### 資料別サマリー"
 
     lines: list[str] = []
     lines.append(f"# {title}")
@@ -159,7 +197,7 @@ def _build_report_md(step2: dict[str, Any], step9: dict[str, Any], step8: dict[s
     lines.append("## ページの詳細サマリー")
     lines.append(overall or "（詳細サマリーなし）")
     lines.append("")
-    lines.append("### 資料別サマリー")
+    lines.append(detail_heading)
     lines.append(details)
     lines.append("")
     return "\n".join(lines).strip() + "\n"
@@ -194,7 +232,7 @@ def main() -> int:
         raise SystemExit(f"step2 file not found or invalid: {step2_path}")
     _ensure_step9_completed(step9, step9_path)
 
-    out_path = Path(args.output_file) if args.output_file else _derive_output_path(step2)
+    out_path = Path(args.output_file) if args.output_file else _derive_output_path(step2, step8)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     md = _build_report_md(step2, step9, step8)
